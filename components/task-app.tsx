@@ -1218,7 +1218,8 @@ export default function TaskApp() {
                 onReconnect={onReconnect}
                 reconnectRadius={EDGE_RECONNECT_RADIUS}
                 onEdgesDelete={removeEdges}
-                onNodeClick={(_, node) => {
+                onNodeClick={(event, node) => {
+                  if (event.target instanceof Element && event.target.closest(".react-flow__handle")) return;
                   setSelectedTaskId(node.id);
                   setSelectedEdgeId(null);
                   setInspectedTaskId(node.id);
@@ -1295,7 +1296,7 @@ export default function TaskApp() {
                 )}
               </div>
             )}
-            <div className="graph-help">Drag a dot to connect · Click an arrow to adjust it</div>
+            <div className="graph-help">Hover a task to connect · Click an arrow to adjust it</div>
           </div>
           )}
         </section>

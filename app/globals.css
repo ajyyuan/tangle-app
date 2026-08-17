@@ -139,8 +139,9 @@ button { color: inherit; }
 .task-node:hover .node-resize-control, .node-resize-control:active { opacity: 1; pointer-events: all; }
 
 .connection-handle { width: 28px !important; height: 28px !important; min-width: 28px !important; min-height: 28px !important; border: 0 !important; background: transparent !important; }
-.connection-handle::after { content: ""; position: absolute; left: 50%; top: 50%; width: 9px; height: 9px; border: 2px solid white; border-radius: 50%; background: #9fa3aa; opacity: .22; transform: translate(-50%, -50%); transition: opacity 120ms ease, background 120ms ease, transform 120ms ease, box-shadow 120ms ease; }
-.task-node:hover .connection-handle::after, .react-flow__node.selected .connection-handle::after { opacity: 1; }
+.connection-handle::after { content: ""; position: absolute; left: 50%; top: 50%; width: 9px; height: 9px; border: 2px solid white; border-radius: 50%; background: #9fa3aa; opacity: 0; transform: translate(-50%, -50%) scale(.86); transition: opacity 100ms ease, background 100ms ease, transform 100ms ease, box-shadow 100ms ease; }
+.task-node-content:hover ~ .connection-source-handle::after,
+.task-node-content:focus-within ~ .connection-source-handle::after { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 .connection-handle:hover::after, .connection-handle.clickconnecting::after, .connection-handle.connectingfrom::after, .connection-handle.connectingto::after, .connection-handle.valid::after { opacity: 1; background: var(--blue); transform: translate(-50%, -50%) scale(1.18); box-shadow: 0 0 0 4px rgba(52,120,246,.1); }
 .connection-target-handle { z-index: 2; }
 .connection-source-handle { z-index: 3; }
@@ -148,6 +149,8 @@ button { color: inherit; }
 .react-flow:has(.connection-source-handle.connectingfrom) .connection-target-handle { z-index: 4; }
 .connection-target-handle::after { opacity: 0; }
 .connection-target-handle.connectingto::after, .connection-target-handle.valid::after { opacity: 1; background: var(--blue); transform: translate(-50%, -50%) scale(1.18); box-shadow: 0 0 0 4px rgba(52,120,246,.1); }
+.task-node:has(.connection-target-handle.connectingto),
+.task-node:has(.connection-target-handle.valid) { border-color: #a9c3ef; box-shadow: 0 0 0 3px rgba(52,120,246,.08); }
 .connection-handle-top { top: -5px !important; }
 .connection-handle-right { right: -5px !important; }
 .connection-handle-bottom { bottom: -5px !important; }
@@ -241,6 +244,10 @@ button { color: inherit; }
   .graph-panel { min-height: calc(100vh - 81px); border-radius: 8px; }
   .graph-help { max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; }
   .task-inspector { position: fixed; inset: 64px 0 0; z-index: 40; width: auto; min-height: 0; border-left: 0; }
+}
+
+@media (hover: none) {
+  .react-flow__node.selected .connection-source-handle::after { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }
 
 @media (prefers-reduced-motion: reduce) {
