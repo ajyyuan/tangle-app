@@ -11,6 +11,7 @@ import {
   Node,
   NodeChange,
   NodeProps,
+  NodeResizeControl,
   Position,
   ReactFlow,
   useNodesState,
@@ -19,7 +20,8 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import { CheckIcon, GripIcon, PlusIcon, TrashIcon } from "./icons";
 
 type Point = { x: number; y: number };
-type Task = { id: string; title: string; completed: boolean; position: Point };
+type Size = { width: number; height: number };
+type Task = { id: string; title: string; completed: boolean; position: Point; size?: Size };
 type Dependency = { id: string; source: string; target: string };
 type TaskData = { tasks: Task[]; dependencies: Dependency[] };
 type View = "list" | "graph";
@@ -34,6 +36,11 @@ type TaskNodeData = {
 type TaskFlowNode = Node<TaskNodeData, "task">;
 
 const STORAGE_KEY = "tangle-task-data-v1";
+const NODE_MIN_WIDTH = 230;
+const NODE_MAX_AUTO_WIDTH = 360;
+const NODE_MAX_WIDTH = 560;
+const NODE_MIN_HEIGHT = 52;
+const NODE_MAX_HEIGHT = 320;
 
 const SAMPLE_DATA: TaskData = {
   tasks: [
@@ -66,6 +73,48 @@ function nextOpenPosition(tasks: Task[]): Point {
     }
   }
   return { x: 70, y: 70 + tasks.length * 115 };
+}
+
+function estimatedTextWidth(text: string) {
+  return [...text].reduce((width, character) => {
+    if (/[MW@#%&]/.test(character)) return width + 9;
+    if (/[ilI1.,'` ]/.test(character)) return width + 3.6;
+    if (/[A-Z]/.test(character)) return width + 7.5;
+    return width + 6.6;
+  }, 0);
+}
+
+function estimatedLineCount(title: string, availableWidth: number) {
+  const words = title.trim().split(/\s+/);
+  let lines = 1;
+  let lineWidth = 0;
+
+  words.forEach((word) => {
+    const wordWidth = estimatedTextWidth(word);
+    const spacing = lineWidth ? estimatedTextWidth(" ") : 0;
+    if (wordWidth > availableWidth) {
+      if (lineWidth) lines += 1;
+      lines += Math.max(0, Math.ceil(wordWidth / availableWidth) - 1);
+      lineWidth = wordWidth % availableWidth;
+    } else if (lineWidth + spacing + wordWidth > availableWidth) {
+      lines += 1;
+      lineWidth = wordWidth;
+    } else {
+      lineWidth += spacing + wordWidth;
+    }
+  });
+
+  return lines;
+}
+
+function minimumNodeHeight(title: string, width: number) {
+  const titleWidth = Math.max(90, width - 88);
+  return NODE_MIN_HEIGHT + (estimatedLineCount(title, titleWidth) - 1) * 20;
+}
+
+function automaticNodeSize(title: string): Size {
+  const width = Math.min(NODE_MAX_AUTO_WIDTH, Math.max(NODE_MIN_WIDTH, Math.ceil(estimatedTextWidth(title) + 88)));
+  return { width, height: minimumNodeHeight(title, width) };
 }
 
 function CheckButton({ checked, onClick, label }: { checked: boolean; onClick: () => void; label: string }) {
@@ -150,9 +199,18 @@ function InlineTitle({
   );
 }
 
-function TaskNode({ id, data }: NodeProps<TaskFlowNode>) {
+function TaskNode({ id, data, width }: NodeProps<TaskFlowNode>) {
+  const contentHeight = minimumNodeHeight(data.title, width ?? NODE_MIN_WIDTH);
   return (
     <div className={`task-node ${data.completed ? "is-completed" : ""} ${data.blocked ? "is-blocked" : ""}`}>
+      <NodeResizeControl
+        position="bottom-right"
+        className="node-resize-control"
+        minWidth={NODE_MIN_WIDTH}
+        minHeight={contentHeight}
+        maxWidth={NODE_MAX_WIDTH}
+        maxHeight={NODE_MAX_HEIGHT}
+      />
       <Handle type="target" position={Position.Left} className="connection-handle connection-target" />
       <div className="task-node-content">
         <CheckButton
@@ -306,10 +364,12 @@ export default function TaskApp() {
   const [hydrated, setHydrated] = useState(false);
   const [newTask, setNewTask] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const positionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingNodePositions = useRef<Map<string, Point>>(new Map());
+  const pendingNodeSizes = useRef<Map<string, Size>>(new Map());
 
   useEffect(() => {
     try {
@@ -376,6 +436,7 @@ export default function TaskApp() {
   }, []);
 
   const deleteTask = useCallback((id: string) => {
+    setSelectedNodeId((selected) => selected === id ? null : selected);
     setData((current) => ({
       tasks: current.tasks.filter((task) => task.id !== id),
       dependencies: current.dependencies.filter((edge) => edge.source !== id && edge.target !== id),
@@ -415,7 +476,9 @@ export default function TaskApp() {
   const taskNodes = useMemo<TaskFlowNode[]>(() => data.tasks.map((task) => ({
     id: task.id,
     type: "task",
+    selected: task.id === selectedNodeId,
     position: task.position,
+    style: task.size ?? automaticNodeSize(task.title),
     data: {
       title: task.title,
       completed: task.completed,
@@ -424,7 +487,7 @@ export default function TaskApp() {
       onRename: renameTask,
       onDelete: deleteTask,
     },
-  })), [data.tasks, blockedIds, toggleTask, renameTask, deleteTask]);
+  })), [data.tasks, blockedIds, selectedNodeId, toggleTask, renameTask, deleteTask]);
 
   const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<TaskFlowNode>(taskNodes);
 
@@ -441,32 +504,42 @@ export default function TaskApp() {
     interactionWidth: 22,
   })), [data.dependencies, selectedEdgeId]);
 
-  const flushNodePositions = useCallback(() => {
-    if (!pendingNodePositions.current.size) return;
+  const flushNodeLayout = useCallback(() => {
+    if (!pendingNodePositions.current.size && !pendingNodeSizes.current.size) return;
     const positions = new Map(pendingNodePositions.current);
+    const sizes = new Map(pendingNodeSizes.current);
     pendingNodePositions.current.clear();
+    pendingNodeSizes.current.clear();
     if (positionSaveTimer.current) clearTimeout(positionSaveTimer.current);
     positionSaveTimer.current = null;
     setData((current) => ({
       ...current,
-      tasks: current.tasks.map((task) => positions.has(task.id) ? { ...task, position: positions.get(task.id)! } : task),
+      tasks: current.tasks.map((task) => ({
+        ...task,
+        ...(positions.has(task.id) ? { position: positions.get(task.id)! } : {}),
+        ...(sizes.has(task.id) ? { size: sizes.get(task.id)! } : {}),
+      })),
     }));
   }, []);
 
   const handleFlowNodesChange = useCallback((changes: NodeChange<TaskFlowNode>[]) => {
     onFlowNodesChange(changes);
-    let positionChanged = false;
+    let layoutChanged = false;
     changes.forEach((change) => {
       if (change.type === "position" && change.position) {
         pendingNodePositions.current.set(change.id, change.position);
-        positionChanged = true;
+        layoutChanged = true;
+      }
+      if (change.type === "dimensions" && change.dimensions) {
+        pendingNodeSizes.current.set(change.id, change.dimensions);
+        layoutChanged = true;
       }
     });
-    if (positionChanged) {
+    if (layoutChanged) {
       if (positionSaveTimer.current) clearTimeout(positionSaveTimer.current);
-      positionSaveTimer.current = setTimeout(flushNodePositions, 140);
+      positionSaveTimer.current = setTimeout(flushNodeLayout, 140);
     }
-  }, [flushNodePositions, onFlowNodesChange]);
+  }, [flushNodeLayout, onFlowNodesChange]);
 
   const onConnect = useCallback((connection: Connection) => {
     if (!connection.source || !connection.target) return;
@@ -542,14 +615,22 @@ export default function TaskApp() {
                 edges={flowEdges}
                 nodeTypes={nodeTypes}
                 onNodesChange={handleFlowNodesChange}
-                onNodeDragStop={flushNodePositions}
+                onNodeDragStop={flushNodeLayout}
                 onConnect={onConnect}
                 onEdgesDelete={removeEdges}
+                onNodeClick={(_, node) => {
+                  setSelectedNodeId(node.id);
+                  setSelectedEdgeId(null);
+                }}
                 onEdgeClick={(event, edge) => {
                   event.stopPropagation();
+                  setSelectedNodeId(null);
                   setSelectedEdgeId(edge.id);
                 }}
-                onPaneClick={() => setSelectedEdgeId(null)}
+                onPaneClick={() => {
+                  setSelectedNodeId(null);
+                  setSelectedEdgeId(null);
+                }}
                 deleteKeyCode={["Backspace", "Delete"]}
                 fitView
                 fitViewOptions={{ padding: 0.14, maxZoom: 1.15 }}

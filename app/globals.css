@@ -116,16 +116,18 @@ button { color: inherit; }
 .react-flow__node:active { cursor: grabbing; }
 .react-flow__node.selected .task-node { border-color: #9ebcf2; box-shadow: 0 0 0 3px rgba(52,120,246,.1); }
 
-.task-node { width: 230px; height: 52px; border: 1px solid #dadbde; border-radius: 8px; background: rgba(255,255,255,.98); box-shadow: 0 1px 2px rgba(20,24,32,.05); transition: opacity 140ms ease, border-color 140ms ease, box-shadow 140ms ease; }
+.task-node { width: 100%; height: 100%; min-width: 230px; min-height: 52px; border: 1px solid #dadbde; border-radius: 8px; background: rgba(255,255,255,.98); box-shadow: 0 1px 2px rgba(20,24,32,.05); transition: opacity 140ms ease, border-color 140ms ease, box-shadow 140ms ease; }
 .task-node:hover { border-color: #c5c7cb; box-shadow: 0 2px 5px rgba(20,24,32,.07); }
 .task-node.is-blocked:not(.is-completed) { opacity: 0.64; background: rgba(250,250,249,.96); }
 .task-node.is-completed { opacity: 0.54; }
 .task-node-content { height: 100%; display: grid; grid-template-columns: 21px minmax(0, 1fr) 24px; align-items: center; gap: 10px; padding: 0 11px 0 12px; }
 .task-node .check-button { width: 20px; height: 20px; }
-.node-title { width: 100%; font-size: 13px; padding-left: 0; padding-right: 0; }
+.node-title { width: 100%; font-size: 13px; line-height: 18px; padding-left: 0; padding-right: 0; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
 .task-node:hover .node-delete, .node-delete:focus-visible { opacity: 1; }
 .node-delete { width: 24px; height: 26px; }
 .node-delete svg { width: 16px; }
+.node-resize-control { width: 10px !important; height: 10px !important; right: -5px !important; bottom: -5px !important; z-index: 4; border: 2px solid white !important; border-radius: 3px !important; background: var(--blue) !important; box-shadow: 0 0 0 1px rgba(52,120,246,.28); cursor: nwse-resize; opacity: 0; pointer-events: none; transition: opacity 100ms ease; }
+.task-node:hover .node-resize-control, .node-resize-control:active { opacity: 1; pointer-events: all; }
 
 .connection-handle { width: 9px !important; height: 9px !important; min-width: 9px !important; min-height: 9px !important; border: 2px solid white !important; background: #9fa3aa !important; opacity: .2; transition: opacity 120ms ease, background 120ms ease, transform 120ms ease; }
 .task-node:hover .connection-handle, .react-flow__node.selected .connection-handle { opacity: 1; }
