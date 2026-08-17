@@ -79,3 +79,13 @@ export function ArrangeIcon(props: IconProps) {
     </svg>
   );
 }
+
+export function SettingsIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 18 18" fill="none" aria-hidden="true" {...props}>
+      <circle cx="9" cy="9" r="2.25" stroke="currentColor" strokeWidth="1.35" />
+      <path d="M9 2.5v1.25M9 14.25v1.25M15.5 9h-1.25M3.75 9H2.5M13.6 4.4l-.9.9M5.3 12.7l-.9.9M13.6 13.6l-.9-.9M5.3 5.3l-.9-.9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <circle cx="9" cy="9" r="5.1" stroke="currentColor" strokeWidth="1.15" strokeDasharray="1.4 2.1" />
+    </svg>
+  );
+}

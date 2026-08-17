@@ -142,8 +142,10 @@ button { color: inherit; }
 .connection-handle::after { content: ""; position: absolute; left: 50%; top: 50%; width: 9px; height: 9px; border: 2px solid white; border-radius: 50%; background: #9fa3aa; opacity: .22; transform: translate(-50%, -50%); transition: opacity 120ms ease, background 120ms ease, transform 120ms ease, box-shadow 120ms ease; }
 .task-node:hover .connection-handle::after, .react-flow__node.selected .connection-handle::after { opacity: 1; }
 .connection-handle:hover::after, .connection-handle.clickconnecting::after, .connection-handle.connectingfrom::after, .connection-handle.connectingto::after, .connection-handle.valid::after { opacity: 1; background: var(--blue); transform: translate(-50%, -50%) scale(1.18); box-shadow: 0 0 0 4px rgba(52,120,246,.1); }
-.connection-target { left: -5px !important; }
-.connection-source { right: -5px !important; }
+.connection-target-horizontal { left: -5px !important; }
+.connection-source-horizontal { right: -5px !important; }
+.connection-target-vertical { top: -5px !important; }
+.connection-source-vertical { bottom: -5px !important; }
 .react-flow__edge-path { transition: stroke 120ms ease, stroke-width 120ms ease; }
 .react-flow__edge:hover .react-flow__edge-path, .react-flow__edge.selected .react-flow__edge-path { stroke: var(--blue) !important; stroke-width: 2 !important; }
 .react-flow__edge.selected .react-flow__edge-path { filter: drop-shadow(0 0 2px rgba(52,120,246,.25)); }
@@ -162,12 +164,25 @@ button { color: inherit; }
 .react-flow__controls-button svg { max-width: 13px; max-height: 13px; }
 
 .graph-actions { position: absolute; top: 12px; left: 12px; z-index: 5; }
-.graph-actions button { height: 31px; display: inline-flex; align-items: center; gap: 7px; padding: 0 10px 0 8px; border: 1px solid #dedfdf; border-radius: 7px; background: rgba(255,255,255,.94); color: #65686e; box-shadow: 0 1px 3px rgba(20,24,32,.06); font-size: 12px; cursor: pointer; backdrop-filter: blur(6px); transition: color 120ms ease, border-color 120ms ease, background 120ms ease, box-shadow 120ms ease; }
-.graph-actions button:hover:not(:disabled) { color: #34363a; border-color: #d1d2d3; background: white; box-shadow: 0 2px 5px rgba(20,24,32,.08); }
+.graph-actions button { height: 31px; border: 1px solid #dedfdf; background: rgba(255,255,255,.94); color: #65686e; font-size: 12px; cursor: pointer; backdrop-filter: blur(6px); transition: color 120ms ease, border-color 120ms ease, background 120ms ease, box-shadow 120ms ease; }
+.graph-actions button:hover:not(:disabled) { color: #34363a; background: white; }
 .graph-actions button:active:not(:disabled) { background: #f7f7f5; }
-.graph-actions button:focus-visible { outline: 3px solid rgba(52,120,246,.16); outline-offset: 2px; }
+.graph-actions button:focus-visible { position: relative; z-index: 1; outline: 3px solid rgba(52,120,246,.16); outline-offset: 1px; }
 .graph-actions button:disabled { opacity: .6; cursor: default; }
-.graph-actions svg { width: 17px; height: 17px; color: #7c8087; }
+.arrange-control { display: flex; filter: drop-shadow(0 1px 2px rgba(20,24,32,.06)); }
+.arrange-button { display: inline-flex; align-items: center; gap: 7px; padding: 0 10px 0 8px; border-radius: 7px 0 0 7px; }
+.arrange-button:hover:not(:disabled) { border-color: #d1d2d3; box-shadow: 0 2px 5px rgba(20,24,32,.08); }
+.arrange-button svg { width: 17px; height: 17px; color: #7c8087; }
+.arrange-settings-button { width: 31px; display: grid; place-items: center; padding: 0; margin-left: -1px; border-radius: 0 7px 7px 0; }
+.arrange-settings-button[aria-expanded="true"] { background: #f2f2f0; color: #3f4247; }
+.arrange-settings-button svg { width: 16px; height: 16px; }
+.arrange-popover { position: absolute; top: 38px; left: 0; width: 194px; padding: 11px; border: 1px solid #dedfdf; border-radius: 8px; background: rgba(255,255,255,.98); box-shadow: 0 6px 20px rgba(20,24,32,.12); animation: connection-tool-in 120ms ease-out; backdrop-filter: blur(8px); }
+.arrange-popover > span { display: block; margin: 0 0 8px 2px; color: #85878d; font-size: 11px; font-weight: 590; }
+.layout-direction { display: flex; padding: 2px; border: 1px solid #dedfdf; border-radius: 7px; background: #f5f5f3; }
+.layout-direction button { height: 25px; padding: 0 8px; border: 0; border-radius: 5px; background: transparent; box-shadow: none; color: #85878d; font-size: 11px; }
+.layout-direction button:first-child { flex: 1; }
+.layout-direction button:last-child { flex: 1; }
+.layout-direction button.is-active { background: white; color: #44464b; box-shadow: 0 1px 2px rgba(20,24,32,.09), 0 0 0 .5px rgba(20,24,32,.05); }
 
 .graph-help { position: absolute; left: 50%; bottom: 17px; transform: translateX(-50%); z-index: 5; white-space: nowrap; color: #92949a; background: rgba(251,251,250,.9); border: 1px solid rgba(225,225,222,.9); border-radius: 6px; padding: 6px 9px; font-size: 11px; pointer-events: none; backdrop-filter: blur(6px); }
 .graph-empty { height: 100%; min-height: 520px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #8b8d92; font-size: 13px; }

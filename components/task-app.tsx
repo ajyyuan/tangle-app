@@ -22,7 +22,7 @@ import {
   useNodesState,
 } from "@xyflow/react";
 import { FormEvent, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ArrangeIcon, CheckIcon, CloseIcon, GripIcon, InfoIcon, PlusIcon, RedoIcon, TrashIcon, UndoIcon } from "./icons";
+import { ArrangeIcon, CheckIcon, CloseIcon, GripIcon, InfoIcon, PlusIcon, RedoIcon, SettingsIcon, TrashIcon, UndoIcon } from "./icons";
 
 type Point = { x: number; y: number };
 type Size = { width: number; height: number };
@@ -36,10 +36,12 @@ type HistoryAction =
   | { type: "undo" }
   | { type: "redo" };
 type View = "list" | "graph";
+type LayoutDirection = "vertical" | "horizontal";
 type TaskNodeData = {
   title: string;
   completed: boolean;
   blocked: boolean;
+  layoutDirection: LayoutDirection;
   onToggle: (id: string) => void;
   onRename: (id: string, title: string) => void;
 };
@@ -48,6 +50,7 @@ type DependencyEdgeData = { onRemove: (id: string) => void };
 type DependencyFlowEdge = Edge<DependencyEdgeData, "dependency">;
 
 const STORAGE_KEY = "tangle-task-data-v1";
+const LAYOUT_DIRECTION_KEY = "tangle-layout-direction-v1";
 const NODE_MIN_WIDTH = 230;
 const NODE_MAX_AUTO_WIDTH = 360;
 const NODE_MAX_WIDTH = 560;
@@ -58,8 +61,8 @@ const EDGE_RECONNECT_RADIUS = 18;
 const NODE_CONNECTION_RADIUS = 28;
 const LAYOUT_START_X = 72;
 const LAYOUT_START_Y = 72;
-const LAYOUT_COLUMN_GAP = 120;
-const LAYOUT_ROW_GAP = 46;
+const LAYOUT_LAYER_GAP = 110;
+const LAYOUT_SIBLING_GAP = 46;
 
 const SAMPLE_DATA: TaskData = {
   tasks: [
@@ -168,7 +171,7 @@ function automaticNodeSize(title: string): Size {
   return { width, height: minimumNodeHeight(title, width) };
 }
 
-function arrangeTasks(tasks: Task[], dependencies: Dependency[]): Task[] {
+function arrangeTasks(tasks: Task[], dependencies: Dependency[], direction: LayoutDirection): Task[] {
   if (!tasks.length) return tasks;
 
   const taskIds = new Set(tasks.map((task) => task.id));
@@ -194,35 +197,58 @@ function arrangeTasks(tasks: Task[], dependencies: Dependency[]): Task[] {
     });
   }
 
-  const columns = new Map<number, Task[]>();
+  const layers = new Map<number, Task[]>();
   tasks.forEach((task) => {
     const taskLevel = level.get(task.id) ?? 0;
-    columns.set(taskLevel, [...(columns.get(taskLevel) ?? []), task]);
+    layers.set(taskLevel, [...(layers.get(taskLevel) ?? []), task]);
   });
 
-  const orderedColumns = [...columns.entries()].sort(([a], [b]) => a - b).map(([columnLevel, columnTasks]) => ({
-    level: columnLevel,
-    tasks: columnTasks.sort((a, b) => a.position.y - b.position.y || (taskOrder.get(a.id) ?? 0) - (taskOrder.get(b.id) ?? 0)),
+  const orderedLayers = [...layers.entries()].sort(([a], [b]) => a - b).map(([, layerTasks]) => ({
+    tasks: layerTasks.sort((a, b) => {
+      const spatialDifference = direction === "vertical" ? a.position.x - b.position.x : a.position.y - b.position.y;
+      return spatialDifference || (taskOrder.get(a.id) ?? 0) - (taskOrder.get(b.id) ?? 0);
+    }),
   }));
-  const columnHeights = orderedColumns.map(({ tasks: columnTasks }) => columnTasks.reduce((height, task, index) => {
-    const size = task.size ?? automaticNodeSize(task.title);
-    return height + size.height + (index ? LAYOUT_ROW_GAP : 0);
-  }, 0));
-  const tallestColumn = Math.max(...columnHeights);
   const positions = new Map<string, Point>();
-  let x = LAYOUT_START_X;
-
-  orderedColumns.forEach(({ tasks: columnTasks }, columnIndex) => {
-    let y = LAYOUT_START_Y + (tallestColumn - columnHeights[columnIndex]) / 2;
-    let widestNode = 0;
-    columnTasks.forEach((task) => {
+  if (direction === "vertical") {
+    const layerWidths = orderedLayers.map(({ tasks: layerTasks }) => layerTasks.reduce((width, task, index) => {
       const size = task.size ?? automaticNodeSize(task.title);
-      positions.set(task.id, { x, y });
-      y += size.height + LAYOUT_ROW_GAP;
-      widestNode = Math.max(widestNode, size.width);
+      return width + size.width + (index ? LAYOUT_SIBLING_GAP : 0);
+    }, 0));
+    const widestLayer = Math.max(...layerWidths);
+    let y = LAYOUT_START_Y;
+
+    orderedLayers.forEach(({ tasks: layerTasks }, layerIndex) => {
+      let x = LAYOUT_START_X + (widestLayer - layerWidths[layerIndex]) / 2;
+      let tallestNode = 0;
+      layerTasks.forEach((task) => {
+        const size = task.size ?? automaticNodeSize(task.title);
+        positions.set(task.id, { x, y });
+        x += size.width + LAYOUT_SIBLING_GAP;
+        tallestNode = Math.max(tallestNode, size.height);
+      });
+      y += tallestNode + LAYOUT_LAYER_GAP;
     });
-    x += widestNode + LAYOUT_COLUMN_GAP;
-  });
+  } else {
+    const layerHeights = orderedLayers.map(({ tasks: layerTasks }) => layerTasks.reduce((height, task, index) => {
+      const size = task.size ?? automaticNodeSize(task.title);
+      return height + size.height + (index ? LAYOUT_SIBLING_GAP : 0);
+    }, 0));
+    const tallestLayer = Math.max(...layerHeights);
+    let x = LAYOUT_START_X;
+
+    orderedLayers.forEach(({ tasks: layerTasks }, layerIndex) => {
+      let y = LAYOUT_START_Y + (tallestLayer - layerHeights[layerIndex]) / 2;
+      let widestNode = 0;
+      layerTasks.forEach((task) => {
+        const size = task.size ?? automaticNodeSize(task.title);
+        positions.set(task.id, { x, y });
+        y += size.height + LAYOUT_SIBLING_GAP;
+        widestNode = Math.max(widestNode, size.width);
+      });
+      x += widestNode + LAYOUT_LAYER_GAP;
+    });
+  }
 
   let changed = false;
   const arranged = tasks.map((task) => {
@@ -318,6 +344,7 @@ function InlineTitle({
 
 function TaskNode({ id, data, width }: NodeProps<TaskFlowNode>) {
   const contentHeight = minimumNodeHeight(data.title, width ?? NODE_MIN_WIDTH);
+  const vertical = data.layoutDirection === "vertical";
   return (
     <div className={`task-node ${data.completed ? "is-completed" : ""} ${data.blocked ? "is-blocked" : ""}`}>
       <NodeResizeControl
@@ -328,7 +355,11 @@ function TaskNode({ id, data, width }: NodeProps<TaskFlowNode>) {
         maxWidth={NODE_MAX_WIDTH}
         maxHeight={NODE_MAX_HEIGHT}
       />
-      <Handle type="target" position={Position.Left} className="connection-handle connection-target" />
+      <Handle
+        type="target"
+        position={vertical ? Position.Top : Position.Left}
+        className={`connection-handle connection-target-${data.layoutDirection}`}
+      />
       <div className="task-node-content">
         <CheckButton
           checked={data.completed}
@@ -337,7 +368,11 @@ function TaskNode({ id, data, width }: NodeProps<TaskFlowNode>) {
         />
         <InlineTitle title={data.title} completed={data.completed} onSave={(title) => data.onRename(id, title)} className="node-title" />
       </div>
-      <Handle type="source" position={Position.Right} className="connection-handle connection-source" />
+      <Handle
+        type="source"
+        position={vertical ? Position.Bottom : Position.Right}
+        className={`connection-handle connection-source-${data.layoutDirection}`}
+      />
     </div>
   );
 }
@@ -663,10 +698,13 @@ export default function TaskApp() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [isArranging, setIsArranging] = useState(false);
+  const [layoutDirection, setLayoutDirection] = useState<LayoutDirection>("vertical");
+  const [arrangementOptionsOpen, setArrangementOptionsOpen] = useState(false);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const positionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const arrangeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const arrangeFrame = useRef<number | null>(null);
+  const arrangementOptionsRef = useRef<HTMLDivElement>(null);
   const pendingNodePositions = useRef<Map<string, Point>>(new Map());
   const pendingNodeSizes = useRef<Map<string, Size>>(new Map());
   const flowInstance = useRef<ReactFlowInstance<TaskFlowNode, DependencyFlowEdge> | null>(null);
@@ -678,6 +716,8 @@ export default function TaskApp() {
     try {
       const saved = window.localStorage.getItem(STORAGE_KEY);
       if (saved) dispatchHistory({ type: "reset", data: JSON.parse(saved) as TaskData });
+      const savedDirection = window.localStorage.getItem(LAYOUT_DIRECTION_KEY);
+      if (savedDirection === "vertical" || savedDirection === "horizontal") setLayoutDirection(savedDirection);
     } catch {
       // Keep the sample data if saved data is unavailable or malformed.
     }
@@ -687,6 +727,27 @@ export default function TaskApp() {
   useEffect(() => {
     if (hydrated) window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   }, [data, hydrated]);
+
+  useEffect(() => {
+    if (hydrated) window.localStorage.setItem(LAYOUT_DIRECTION_KEY, layoutDirection);
+  }, [hydrated, layoutDirection]);
+
+  useEffect(() => {
+    if (!arrangementOptionsOpen) return;
+    const closeOptions = (event: PointerEvent) => {
+      if (event.target instanceof Element && arrangementOptionsRef.current?.contains(event.target)) return;
+      setArrangementOptionsOpen(false);
+    };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setArrangementOptionsOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOptions);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOptions);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [arrangementOptionsOpen]);
 
   useEffect(() => {
     if (view !== "graph" || !flowInstance.current) return;
@@ -830,10 +891,11 @@ export default function TaskApp() {
       title: task.title,
       completed: task.completed,
       blocked: blockedIds.has(task.id),
+      layoutDirection,
       onToggle: toggleTask,
       onRename: renameTask,
     },
-  })), [data.tasks, blockedIds, selectedTaskId, toggleTask, renameTask]);
+  })), [data.tasks, blockedIds, layoutDirection, selectedTaskId, toggleTask, renameTask]);
 
   const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<TaskFlowNode>(taskNodes);
 
@@ -910,7 +972,7 @@ export default function TaskApp() {
     }
   }, [flushNodeLayout, onFlowNodesChange]);
 
-  const arrangeGraph = useCallback(() => {
+  const arrangeGraph = useCallback((direction: LayoutDirection = layoutDirection) => {
     flushNodeLayout();
     if (arrangeFrame.current) cancelAnimationFrame(arrangeFrame.current);
     if (arrangeTimer.current) clearTimeout(arrangeTimer.current);
@@ -918,7 +980,7 @@ export default function TaskApp() {
     arrangeFrame.current = requestAnimationFrame(() => {
       arrangeFrame.current = null;
       updateData((current) => {
-        const tasks = arrangeTasks(current.tasks, current.dependencies);
+        const tasks = arrangeTasks(current.tasks, current.dependencies, direction);
         return tasks === current.tasks ? current : { ...current, tasks };
       });
       arrangeTimer.current = setTimeout(() => {
@@ -927,7 +989,12 @@ export default function TaskApp() {
         arrangeTimer.current = null;
       }, 360);
     });
-  }, [flushNodeLayout, updateData]);
+  }, [flushNodeLayout, layoutDirection, updateData]);
+
+  const chooseLayoutDirection = useCallback((direction: LayoutDirection) => {
+    setLayoutDirection(direction);
+    setArrangementOptionsOpen(false);
+  }, []);
 
   const onConnect = useCallback((connection: Connection) => {
     if (!connection.source || !connection.target) return;
@@ -1128,10 +1195,49 @@ export default function TaskApp() {
               </ReactFlow>
             )}
             {!!data.tasks.length && (
-              <div className="graph-actions">
-                <button type="button" onClick={arrangeGraph} disabled={isArranging} title="Arrange by dependencies">
-                  <ArrangeIcon /> Arrange
-                </button>
+              <div className="graph-actions" ref={arrangementOptionsRef}>
+                <div className="arrange-control">
+                  <button
+                    className="arrange-button"
+                    type="button"
+                    onClick={() => {
+                      setArrangementOptionsOpen(false);
+                      arrangeGraph();
+                    }}
+                    disabled={isArranging}
+                    title={`Arrange ${layoutDirection === "vertical" ? "top to bottom" : "left to right"}`}
+                  >
+                    <ArrangeIcon /> Arrange
+                  </button>
+                  <button
+                    className="arrange-settings-button"
+                    type="button"
+                    onClick={() => setArrangementOptionsOpen((open) => !open)}
+                    aria-label="Arrangement options"
+                    aria-expanded={arrangementOptionsOpen}
+                    aria-haspopup="dialog"
+                    title="Arrangement options"
+                  ><SettingsIcon /></button>
+                </div>
+                {arrangementOptionsOpen && (
+                  <div className="arrange-popover" role="dialog" aria-label="Arrangement options">
+                    <span>Direction</span>
+                    <div className="layout-direction" aria-label="Arrange direction">
+                      <button
+                        type="button"
+                        className={layoutDirection === "vertical" ? "is-active" : ""}
+                        aria-pressed={layoutDirection === "vertical"}
+                        onClick={() => chooseLayoutDirection("vertical")}
+                      >Vertical</button>
+                      <button
+                        type="button"
+                        className={layoutDirection === "horizontal" ? "is-active" : ""}
+                        aria-pressed={layoutDirection === "horizontal"}
+                        onClick={() => chooseLayoutDirection("horizontal")}
+                      >Horizontal</button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
             <div className="graph-help">Drag a dot to connect · Click an arrow to adjust it</div>
