@@ -81,6 +81,7 @@ button { color: inherit; }
 .task-row.is-blocked:not(.is-completed) .inline-title { color: #8e9095; }
 .task-row.is-completed { opacity: 0.58; }
 .task-row.is-inspected { background: rgba(52,120,246,.035); }
+.task-row.is-selected { background: rgba(52,120,246,.07); }
 .task-row.is-dragging { opacity: 0.48; }
 .drag-grip { color: #c2c3c7; width: 12px; opacity: 0; cursor: grab; touch-action: none; transition: opacity 120ms ease; }
 .drag-grip svg { width: 10px; display: block; }
@@ -101,7 +102,7 @@ button { color: inherit; }
 
 .row-info { width: 30px; height: 30px; padding: 0; display: grid; place-items: center; border: 0; background: transparent; color: #a6a8ad; border-radius: 5px; cursor: pointer; opacity: 0; transition: opacity 120ms ease, color 120ms ease, background 120ms ease; }
 .row-info svg { width: 18px; height: 18px; }
-.task-row:hover .row-info, .row-info:focus-visible, .task-row.is-inspected .row-info { opacity: 1; }
+.task-row:hover .row-info, .row-info:focus-visible, .task-row.is-inspected .row-info, .task-row.is-selected .row-info { opacity: 1; }
 .row-info:hover { color: var(--blue); background: var(--blue-soft); }
 
 .quick-add { height: 54px; display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 10px; margin-top: 8px; padding: 0 4px 0 26px; }

@@ -375,16 +375,20 @@ function ListView({
   onToggle,
   onRename,
   onInspect,
+  onSelect,
   onReorder,
   inspectedTaskId,
+  selectedTaskId,
 }: {
   tasks: Task[];
   blockedIds: Set<string>;
   onToggle: (id: string) => void;
   onRename: (id: string, title: string) => void;
   onInspect: (id: string) => void;
+  onSelect: (id: string) => void;
   onReorder: (draggedId: string, targetId: string) => void;
   inspectedTaskId: string | null;
+  selectedTaskId: string | null;
 }) {
   const [dragged, setDragged] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
@@ -407,7 +411,8 @@ function ListView({
           key={task.id}
           role="listitem"
           data-task-id={task.id}
-          className={`task-row ${task.completed ? "is-completed" : ""} ${blockedIds.has(task.id) ? "is-blocked" : ""} ${inspectedTaskId === task.id ? "is-inspected" : ""} ${dragged === task.id ? "is-dragging" : ""} ${over === task.id ? "is-drop-target" : ""}`}
+          className={`task-row ${task.completed ? "is-completed" : ""} ${blockedIds.has(task.id) ? "is-blocked" : ""} ${inspectedTaskId === task.id ? "is-inspected" : ""} ${selectedTaskId === task.id ? "is-selected" : ""} ${dragged === task.id ? "is-dragging" : ""} ${over === task.id ? "is-drop-target" : ""}`}
+          onPointerDownCapture={() => onSelect(task.id)}
           onPointerDown={(event) => {
             if (!(event.target as HTMLElement).closest(".drag-grip")) return;
             if (event.pointerType === "mouse") return;
@@ -585,7 +590,7 @@ export default function TaskApp() {
   const [newTask, setNewTask] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [inspectedTaskId, setInspectedTaskId] = useState<string | null>(null);
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const positionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -625,10 +630,27 @@ export default function TaskApp() {
 
   useEffect(() => {
     const handleDelete = (event: globalThis.KeyboardEvent) => {
-      if (view !== "graph" || !selectedEdgeId || (event.key !== "Delete" && event.key !== "Backspace")) return;
-      const target = event.target as HTMLElement | null;
-      if (target?.matches("input, textarea, [contenteditable='true']")) return;
+      if (
+        (!selectedTaskId && (view !== "graph" || !selectedEdgeId))
+        || (event.key !== "Delete" && event.key !== "Backspace")
+      ) return;
+      const target = event.target as Element | null;
+      if (target?.closest("input, textarea, [contenteditable='true']")) return;
       event.preventDefault();
+
+      if (selectedTaskId) {
+        updateData((current) => {
+          if (!current.tasks.some((task) => task.id === selectedTaskId)) return current;
+          return {
+            tasks: current.tasks.filter((task) => task.id !== selectedTaskId),
+            dependencies: current.dependencies.filter((edge) => edge.source !== selectedTaskId && edge.target !== selectedTaskId),
+          };
+        });
+        setInspectedTaskId((inspected) => inspected === selectedTaskId ? null : inspected);
+        setSelectedTaskId(null);
+        return;
+      }
+
       updateData((current) => {
         const dependencies = current.dependencies.filter((edge) => edge.id !== selectedEdgeId);
         if (dependencies.length === current.dependencies.length) return current;
@@ -638,7 +660,7 @@ export default function TaskApp() {
     };
     window.addEventListener("keydown", handleDelete);
     return () => window.removeEventListener("keydown", handleDelete);
-  }, [selectedEdgeId, updateData, view]);
+  }, [selectedEdgeId, selectedTaskId, updateData, view]);
 
   const showNotice = useCallback((message: string) => {
     setNotice(message);
@@ -686,7 +708,7 @@ export default function TaskApp() {
 
   const deleteTask = useCallback((id: string) => {
     setInspectedTaskId((inspected) => inspected === id ? null : inspected);
-    setSelectedNodeId((selected) => selected === id ? null : selected);
+    setSelectedTaskId((selected) => selected === id ? null : selected);
     updateData((current) => ({
       tasks: current.tasks.filter((task) => task.id !== id),
       dependencies: current.dependencies.filter((edge) => edge.source !== id && edge.target !== id),
@@ -726,7 +748,7 @@ export default function TaskApp() {
   const taskNodes = useMemo<TaskFlowNode[]>(() => data.tasks.map((task) => ({
     id: task.id,
     type: "task",
-    selected: task.id === selectedNodeId,
+    selected: task.id === selectedTaskId,
     position: task.position,
     style: task.size ?? automaticNodeSize(task.title),
     data: {
@@ -736,7 +758,7 @@ export default function TaskApp() {
       onToggle: toggleTask,
       onRename: renameTask,
     },
-  })), [data.tasks, blockedIds, selectedNodeId, toggleTask, renameTask]);
+  })), [data.tasks, blockedIds, selectedTaskId, toggleTask, renameTask]);
 
   const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<TaskFlowNode>(taskNodes);
 
@@ -861,14 +883,14 @@ export default function TaskApp() {
   const undo = useCallback(() => {
     flushNodeLayout();
     dispatchHistory({ type: "undo" });
-    setSelectedNodeId(null);
+    setSelectedTaskId(null);
     setSelectedEdgeId(null);
   }, [flushNodeLayout]);
 
   const redo = useCallback(() => {
     flushNodeLayout();
     dispatchHistory({ type: "redo" });
-    setSelectedNodeId(null);
+    setSelectedTaskId(null);
     setSelectedEdgeId(null);
   }, [flushNodeLayout]);
 
@@ -897,7 +919,7 @@ export default function TaskApp() {
   const inspectedTask = data.tasks.find((task) => task.id === inspectedTaskId) ?? null;
   const closeInspector = useCallback(() => {
     setInspectedTaskId(null);
-    setSelectedNodeId(null);
+    setSelectedTaskId(null);
   }, []);
 
   return (
@@ -948,8 +970,13 @@ export default function TaskApp() {
               onToggle={toggleTask}
               onRename={renameTask}
               onInspect={setInspectedTaskId}
+              onSelect={(id) => {
+                setSelectedTaskId(id);
+                setSelectedEdgeId(null);
+              }}
               onReorder={reorderTasks}
               inspectedTaskId={inspectedTaskId}
+              selectedTaskId={selectedTaskId}
             />
             <form className="quick-add" onSubmit={addTask}>
               <PlusIcon />
@@ -976,17 +1003,17 @@ export default function TaskApp() {
                 reconnectRadius={EDGE_RECONNECT_RADIUS}
                 onEdgesDelete={removeEdges}
                 onNodeClick={(_, node) => {
-                  setSelectedNodeId(node.id);
+                  setSelectedTaskId(node.id);
                   setSelectedEdgeId(null);
                   setInspectedTaskId(node.id);
                 }}
                 onEdgeClick={(event, edge) => {
                   event.stopPropagation();
-                  setSelectedNodeId(null);
+                  setSelectedTaskId(null);
                   setSelectedEdgeId(edge.id);
                 }}
                 onPaneClick={() => {
-                  setSelectedNodeId(null);
+                  setSelectedTaskId(null);
                   setSelectedEdgeId(null);
                 }}
                 deleteKeyCode={null}
