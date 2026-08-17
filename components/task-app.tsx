@@ -14,14 +14,15 @@ import {
   NodeResizeControl,
   Position,
   ReactFlow,
+  ReactFlowInstance,
   useNodesState,
 } from "@xyflow/react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckIcon, GripIcon, PlusIcon, TrashIcon } from "./icons";
+import { CheckIcon, CloseIcon, GripIcon, InfoIcon, PlusIcon, TrashIcon } from "./icons";
 
 type Point = { x: number; y: number };
 type Size = { width: number; height: number };
-type Task = { id: string; title: string; completed: boolean; position: Point; size?: Size };
+type Task = { id: string; title: string; completed: boolean; position: Point; size?: Size; notes?: string };
 type Dependency = { id: string; source: string; target: string };
 type TaskData = { tasks: Task[]; dependencies: Dependency[] };
 type View = "list" | "graph";
@@ -31,7 +32,6 @@ type TaskNodeData = {
   blocked: boolean;
   onToggle: (id: string) => void;
   onRename: (id: string, title: string) => void;
-  onDelete: (id: string) => void;
 };
 type TaskFlowNode = Node<TaskNodeData, "task">;
 
@@ -108,12 +108,12 @@ function estimatedLineCount(title: string, availableWidth: number) {
 }
 
 function minimumNodeHeight(title: string, width: number) {
-  const titleWidth = Math.max(90, width - 88);
+  const titleWidth = Math.max(90, width - 58);
   return NODE_MIN_HEIGHT + (estimatedLineCount(title, titleWidth) - 1) * 20;
 }
 
 function automaticNodeSize(title: string): Size {
-  const width = Math.min(NODE_MAX_AUTO_WIDTH, Math.max(NODE_MIN_WIDTH, Math.ceil(estimatedTextWidth(title) + 88)));
+  const width = Math.min(NODE_MAX_AUTO_WIDTH, Math.max(NODE_MIN_WIDTH, Math.ceil(estimatedTextWidth(title) + 58)));
   return { width, height: minimumNodeHeight(title, width) };
 }
 
@@ -219,17 +219,6 @@ function TaskNode({ id, data, width }: NodeProps<TaskFlowNode>) {
           label={data.completed ? `Mark ${data.title} incomplete` : `Complete ${data.title}`}
         />
         <InlineTitle title={data.title} completed={data.completed} onSave={(title) => data.onRename(id, title)} className="node-title" />
-        <button
-          type="button"
-          className="node-delete nodrag nopan"
-          onClick={(event) => {
-            event.stopPropagation();
-            data.onDelete(id);
-          }}
-          aria-label={`Delete ${data.title}`}
-        >
-          <TrashIcon />
-        </button>
       </div>
       <Handle type="source" position={Position.Right} className="connection-handle connection-source" />
     </div>
@@ -256,15 +245,17 @@ function ListView({
   blockedIds,
   onToggle,
   onRename,
-  onDelete,
+  onInspect,
   onReorder,
+  inspectedTaskId,
 }: {
   tasks: Task[];
   blockedIds: Set<string>;
   onToggle: (id: string) => void;
   onRename: (id: string, title: string) => void;
-  onDelete: (id: string) => void;
+  onInspect: (id: string) => void;
   onReorder: (draggedId: string, targetId: string) => void;
+  inspectedTaskId: string | null;
 }) {
   const [dragged, setDragged] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
@@ -287,7 +278,7 @@ function ListView({
           key={task.id}
           role="listitem"
           data-task-id={task.id}
-          className={`task-row ${task.completed ? "is-completed" : ""} ${blockedIds.has(task.id) ? "is-blocked" : ""} ${dragged === task.id ? "is-dragging" : ""} ${over === task.id ? "is-drop-target" : ""}`}
+          className={`task-row ${task.completed ? "is-completed" : ""} ${blockedIds.has(task.id) ? "is-blocked" : ""} ${inspectedTaskId === task.id ? "is-inspected" : ""} ${dragged === task.id ? "is-dragging" : ""} ${over === task.id ? "is-drop-target" : ""}`}
           onPointerDown={(event) => {
             if (!(event.target as HTMLElement).closest(".drag-grip")) return;
             if (event.pointerType === "mouse") return;
@@ -349,12 +340,107 @@ function ListView({
             label={task.completed ? `Mark ${task.title} incomplete` : `Complete ${task.title}`}
           />
           <InlineTitle title={task.title} completed={task.completed} onSave={(title) => onRename(task.id, title)} />
-          <button type="button" className="row-delete" onClick={() => onDelete(task.id)} aria-label={`Delete ${task.title}`}>
-            <TrashIcon />
+          <button type="button" className="row-info" onClick={() => onInspect(task.id)} aria-label={`Show details for ${task.title}`}>
+            <InfoIcon />
           </button>
         </div>
       ))}
     </div>
+  );
+}
+
+function TaskInspector({
+  task,
+  onSave,
+  onDelete,
+  onClose,
+}: {
+  task: Task;
+  onSave: (id: string, updates: Pick<Task, "title" | "notes">) => void;
+  onDelete: (id: string) => void;
+  onClose: () => void;
+}) {
+  const [title, setTitle] = useState(task.title);
+  const [notes, setNotes] = useState(task.notes ?? "");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  useEffect(() => {
+    setTitle(task.title);
+    setNotes(task.notes ?? "");
+    setConfirmingDelete(false);
+  }, [task.id, task.title, task.notes]);
+
+  const commit = useCallback(() => {
+    const cleanTitle = title.trim();
+    onSave(task.id, { title: cleanTitle || task.title, notes: notes.trim() });
+  }, [notes, onSave, task.id, task.title, title]);
+
+  useEffect(() => {
+    const handleEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      commit();
+      onClose();
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [commit, onClose]);
+
+  const close = () => {
+    commit();
+    onClose();
+  };
+
+  return (
+    <aside className="task-inspector" aria-label="Task details">
+      <div className="inspector-header">
+        <h2>Details</h2>
+        <button type="button" onClick={close} aria-label="Close details"><CloseIcon /></button>
+      </div>
+      <div className="inspector-content">
+        <label className="inspector-field">
+          <span>Title</span>
+          <input
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            onBlur={commit}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") event.currentTarget.blur();
+            }}
+          />
+        </label>
+        <label className="inspector-field inspector-notes">
+          <span>Notes</span>
+          <textarea
+            value={notes}
+            onChange={(event) => setNotes(event.target.value)}
+            onBlur={commit}
+            placeholder="Add notes"
+          />
+        </label>
+      </div>
+      <div className="inspector-footer">
+        {confirmingDelete ? (
+          <div className="delete-confirmation">
+            <p>Delete this task and its connections?</p>
+            <div>
+              <button type="button" onClick={() => setConfirmingDelete(false)}>Cancel</button>
+              <button
+                type="button"
+                className="confirm-delete"
+                onClick={() => {
+                  onDelete(task.id);
+                  onClose();
+                }}
+              >Delete</button>
+            </div>
+          </div>
+        ) : (
+          <button type="button" className="inspector-delete" onClick={() => setConfirmingDelete(true)}>
+            <TrashIcon /> Delete task…
+          </button>
+        )}
+      </div>
+    </aside>
   );
 }
 
@@ -364,12 +450,14 @@ export default function TaskApp() {
   const [hydrated, setHydrated] = useState(false);
   const [newTask, setNewTask] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const [inspectedTaskId, setInspectedTaskId] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const positionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingNodePositions = useRef<Map<string, Point>>(new Map());
   const pendingNodeSizes = useRef<Map<string, Size>>(new Map());
+  const flowInstance = useRef<ReactFlowInstance<TaskFlowNode, Edge> | null>(null);
 
   useEffect(() => {
     try {
@@ -384,6 +472,14 @@ export default function TaskApp() {
   useEffect(() => {
     if (hydrated) window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   }, [data, hydrated]);
+
+  useEffect(() => {
+    if (view !== "graph" || !flowInstance.current) return;
+    const timer = setTimeout(() => {
+      void flowInstance.current?.fitView({ padding: 0.14, maxZoom: 1.15, duration: 180 });
+    }, 80);
+    return () => clearTimeout(timer);
+  }, [inspectedTaskId, view]);
 
   useEffect(() => () => {
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
@@ -435,7 +531,15 @@ export default function TaskApp() {
     }));
   }, []);
 
+  const saveTaskDetails = useCallback((id: string, updates: Pick<Task, "title" | "notes">) => {
+    setData((current) => ({
+      ...current,
+      tasks: current.tasks.map((task) => task.id === id ? { ...task, ...updates } : task),
+    }));
+  }, []);
+
   const deleteTask = useCallback((id: string) => {
+    setInspectedTaskId((inspected) => inspected === id ? null : inspected);
     setSelectedNodeId((selected) => selected === id ? null : selected);
     setData((current) => ({
       tasks: current.tasks.filter((task) => task.id !== id),
@@ -485,9 +589,8 @@ export default function TaskApp() {
       blocked: blockedIds.has(task.id),
       onToggle: toggleTask,
       onRename: renameTask,
-      onDelete: deleteTask,
     },
-  })), [data.tasks, blockedIds, selectedNodeId, toggleTask, renameTask, deleteTask]);
+  })), [data.tasks, blockedIds, selectedNodeId, toggleTask, renameTask]);
 
   const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<TaskFlowNode>(taskNodes);
 
@@ -569,6 +672,11 @@ export default function TaskApp() {
   }, []);
 
   const countLabel = data.tasks.length === 1 ? "1 task" : `${data.tasks.length} tasks`;
+  const inspectedTask = data.tasks.find((task) => task.id === inspectedTaskId) ?? null;
+  const closeInspector = useCallback(() => {
+    setInspectedTaskId(null);
+    setSelectedNodeId(null);
+  }, []);
 
   return (
     <main className="app-shell">
@@ -584,8 +692,9 @@ export default function TaskApp() {
         <span className="task-count">{countLabel}</span>
       </header>
 
-      <section className={`workspace ${view === "graph" ? "graph-workspace" : "list-workspace"}`}>
-        {view === "list" ? (
+      <div className="workspace-frame">
+        <section className={`workspace ${view === "graph" ? "graph-workspace" : "list-workspace"}`}>
+          {view === "list" ? (
           <div className="list-panel">
             <div className="list-heading">
               <h1>Tasks</h1>
@@ -596,8 +705,9 @@ export default function TaskApp() {
               blockedIds={blockedIds}
               onToggle={toggleTask}
               onRename={renameTask}
-              onDelete={deleteTask}
+              onInspect={setInspectedTaskId}
               onReorder={reorderTasks}
+              inspectedTaskId={inspectedTaskId}
             />
             <form className="quick-add" onSubmit={addTask}>
               <PlusIcon />
@@ -614,6 +724,7 @@ export default function TaskApp() {
                 nodes={flowNodes}
                 edges={flowEdges}
                 nodeTypes={nodeTypes}
+                onInit={(instance) => { flowInstance.current = instance; }}
                 onNodesChange={handleFlowNodesChange}
                 onNodeDragStop={flushNodeLayout}
                 onConnect={onConnect}
@@ -621,11 +732,13 @@ export default function TaskApp() {
                 onNodeClick={(_, node) => {
                   setSelectedNodeId(node.id);
                   setSelectedEdgeId(null);
+                  setInspectedTaskId(node.id);
                 }}
                 onEdgeClick={(event, edge) => {
                   event.stopPropagation();
                   setSelectedNodeId(null);
                   setSelectedEdgeId(edge.id);
+                  setInspectedTaskId(null);
                 }}
                 onPaneClick={() => {
                   setSelectedNodeId(null);
@@ -649,8 +762,17 @@ export default function TaskApp() {
             )}
             <div className="graph-help">Drag from a dot to connect tasks · Select an arrow and press Delete to remove it</div>
           </div>
+          )}
+        </section>
+        {inspectedTask && (
+          <TaskInspector
+            task={inspectedTask}
+            onSave={saveTaskDetails}
+            onDelete={deleteTask}
+            onClose={closeInspector}
+          />
         )}
-      </section>
+      </div>
       <div className={`notice ${notice ? "is-visible" : ""}`} role="status" aria-live="polite">{notice}</div>
     </main>
   );
