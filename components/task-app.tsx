@@ -13,6 +13,7 @@ import {
   NodeProps,
   Position,
   ReactFlow,
+  useNodesState,
 } from "@xyflow/react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckIcon, GripIcon, PlusIcon, TrashIcon } from "./icons";
@@ -307,6 +308,8 @@ export default function TaskApp() {
   const [notice, setNotice] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const positionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingNodePositions = useRef<Map<string, Point>>(new Map());
 
   useEffect(() => {
     try {
@@ -324,6 +327,7 @@ export default function TaskApp() {
 
   useEffect(() => () => {
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    if (positionSaveTimer.current) clearTimeout(positionSaveTimer.current);
   }, []);
 
   useEffect(() => {
@@ -408,7 +412,7 @@ export default function TaskApp() {
     });
   }, []);
 
-  const flowNodes = useMemo<TaskFlowNode[]>(() => data.tasks.map((task) => ({
+  const taskNodes = useMemo<TaskFlowNode[]>(() => data.tasks.map((task) => ({
     id: task.id,
     type: "task",
     position: task.position,
@@ -422,6 +426,12 @@ export default function TaskApp() {
     },
   })), [data.tasks, blockedIds, toggleTask, renameTask, deleteTask]);
 
+  const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<TaskFlowNode>(taskNodes);
+
+  useEffect(() => {
+    setFlowNodes(taskNodes);
+  }, [taskNodes, setFlowNodes]);
+
   const flowEdges = useMemo<Edge[]>(() => data.dependencies.map((edge) => ({
     ...edge,
     selected: edge.id === selectedEdgeId,
@@ -431,17 +441,32 @@ export default function TaskApp() {
     interactionWidth: 22,
   })), [data.dependencies, selectedEdgeId]);
 
-  const onNodesChange = useCallback((changes: NodeChange<TaskFlowNode>[]) => {
-    const positions = new Map<string, Point>();
-    changes.forEach((change) => {
-      if (change.type === "position" && change.position) positions.set(change.id, change.position);
-    });
-    if (!positions.size) return;
+  const flushNodePositions = useCallback(() => {
+    if (!pendingNodePositions.current.size) return;
+    const positions = new Map(pendingNodePositions.current);
+    pendingNodePositions.current.clear();
+    if (positionSaveTimer.current) clearTimeout(positionSaveTimer.current);
+    positionSaveTimer.current = null;
     setData((current) => ({
       ...current,
       tasks: current.tasks.map((task) => positions.has(task.id) ? { ...task, position: positions.get(task.id)! } : task),
     }));
   }, []);
+
+  const handleFlowNodesChange = useCallback((changes: NodeChange<TaskFlowNode>[]) => {
+    onFlowNodesChange(changes);
+    let positionChanged = false;
+    changes.forEach((change) => {
+      if (change.type === "position" && change.position) {
+        pendingNodePositions.current.set(change.id, change.position);
+        positionChanged = true;
+      }
+    });
+    if (positionChanged) {
+      if (positionSaveTimer.current) clearTimeout(positionSaveTimer.current);
+      positionSaveTimer.current = setTimeout(flushNodePositions, 140);
+    }
+  }, [flushNodePositions, onFlowNodesChange]);
 
   const onConnect = useCallback((connection: Connection) => {
     if (!connection.source || !connection.target) return;
@@ -516,7 +541,8 @@ export default function TaskApp() {
                 nodes={flowNodes}
                 edges={flowEdges}
                 nodeTypes={nodeTypes}
-                onNodesChange={onNodesChange}
+                onNodesChange={handleFlowNodesChange}
+                onNodeDragStop={flushNodePositions}
                 onConnect={onConnect}
                 onEdgesDelete={removeEdges}
                 onEdgeClick={(event, edge) => {
