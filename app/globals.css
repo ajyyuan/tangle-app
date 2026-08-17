@@ -47,7 +47,15 @@ button { color: inherit; }
 .view-toggle button { min-width: 72px; height: 30px; padding: 0 16px; border: 0; border-radius: 6px; background: transparent; color: #696b70; font-size: 13px; cursor: pointer; transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease; }
 .view-toggle button.active { background: white; color: #26272a; box-shadow: 0 1px 2px rgba(0,0,0,0.09), 0 0 0 0.5px rgba(0,0,0,0.05); }
 .view-toggle button:focus-visible { outline: 2px solid rgba(52, 120, 246, 0.45); outline-offset: 1px; }
-.task-count { justify-self: end; color: #92949a; font-size: 12px; }
+.header-actions { justify-self: end; display: flex; align-items: center; gap: 14px; }
+.history-controls { display: flex; align-items: center; gap: 2px; }
+.history-controls button { width: 29px; height: 29px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: #777a80; cursor: pointer; transition: color 120ms ease, background 120ms ease, opacity 120ms ease; }
+.history-controls button:hover:not(:disabled) { background: #ebebe9; color: #34363a; }
+.history-controls button:active:not(:disabled) { background: #e5e5e2; }
+.history-controls button:focus-visible { outline: 2px solid rgba(52,120,246,.35); outline-offset: 1px; }
+.history-controls button:disabled { color: #bfc0c3; opacity: .45; cursor: default; }
+.history-controls svg { width: 18px; height: 18px; }
+.task-count { color: #92949a; font-size: 12px; }
 
 .workspace-frame { flex: 1; min-height: 0; display: flex; }
 .workspace { flex: 1; min-width: 0; min-height: 0; }
@@ -177,10 +185,11 @@ button { color: inherit; }
 .notice.is-visible { opacity: 1; transform: translate(-50%, 0); }
 
 @media (max-width: 680px) {
-  .app-header { padding: 0 15px; grid-template-columns: auto 1fr; gap: 18px; }
-  .view-toggle { justify-self: end; }
+  .app-header { padding: 0 12px; grid-template-columns: auto 1fr auto; gap: 10px; }
+  .view-toggle { justify-self: center; }
   .view-toggle button { min-width: 60px; padding: 0 12px; }
   .task-count { display: none; }
+  .header-actions { gap: 0; }
   .list-workspace { padding: 43px 16px 80px; }
   .task-row { grid-template-columns: 8px 22px minmax(0, 1fr) 30px; gap: 9px; }
   .drag-grip { opacity: .45; transform: translateX(-3px); }

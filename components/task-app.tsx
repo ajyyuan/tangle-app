@@ -17,14 +17,20 @@ import {
   ReactFlowInstance,
   useNodesState,
 } from "@xyflow/react";
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckIcon, CloseIcon, GripIcon, InfoIcon, PlusIcon, TrashIcon } from "./icons";
+import { FormEvent, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { CheckIcon, CloseIcon, GripIcon, InfoIcon, PlusIcon, RedoIcon, TrashIcon, UndoIcon } from "./icons";
 
 type Point = { x: number; y: number };
 type Size = { width: number; height: number };
 type Task = { id: string; title: string; completed: boolean; position: Point; size?: Size; notes?: string };
 type Dependency = { id: string; source: string; target: string };
 type TaskData = { tasks: Task[]; dependencies: Dependency[] };
+type HistoryState = { past: TaskData[]; present: TaskData; future: TaskData[] };
+type HistoryAction =
+  | { type: "reset"; data: TaskData }
+  | { type: "update"; update: (current: TaskData) => TaskData }
+  | { type: "undo" }
+  | { type: "redo" };
 type View = "list" | "graph";
 type TaskNodeData = {
   title: string;
@@ -41,6 +47,7 @@ const NODE_MAX_AUTO_WIDTH = 360;
 const NODE_MAX_WIDTH = 560;
 const NODE_MIN_HEIGHT = 52;
 const NODE_MAX_HEIGHT = 320;
+const HISTORY_LIMIT = 100;
 
 const SAMPLE_DATA: TaskData = {
   tasks: [
@@ -55,6 +62,38 @@ const SAMPLE_DATA: TaskData = {
     { id: "pittsburgh-internships--apply-internships", source: "pittsburgh-internships", target: "apply-internships" },
   ],
 };
+
+function historyReducer(state: HistoryState, action: HistoryAction): HistoryState {
+  if (action.type === "reset") return { past: [], present: action.data, future: [] };
+
+  if (action.type === "update") {
+    const next = action.update(state.present);
+    if (next === state.present) return state;
+    return {
+      past: [...state.past.slice(-(HISTORY_LIMIT - 1)), state.present],
+      present: next,
+      future: [],
+    };
+  }
+
+  if (action.type === "undo") {
+    const previous = state.past.at(-1);
+    if (!previous) return state;
+    return {
+      past: state.past.slice(0, -1),
+      present: previous,
+      future: [state.present, ...state.future].slice(0, HISTORY_LIMIT),
+    };
+  }
+
+  const next = state.future[0];
+  if (!next) return state;
+  return {
+    past: [...state.past.slice(-(HISTORY_LIMIT - 1)), state.present],
+    present: next,
+    future: state.future.slice(1),
+  };
+}
 
 function uid() {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -446,7 +485,12 @@ function TaskInspector({
 
 export default function TaskApp() {
   const [view, setView] = useState<View>("list");
-  const [data, setData] = useState<TaskData>(SAMPLE_DATA);
+  const [history, dispatchHistory] = useReducer(historyReducer, {
+    past: [],
+    present: SAMPLE_DATA,
+    future: [],
+  });
+  const data = history.present;
   const [hydrated, setHydrated] = useState(false);
   const [newTask, setNewTask] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
@@ -458,11 +502,14 @@ export default function TaskApp() {
   const pendingNodePositions = useRef<Map<string, Point>>(new Map());
   const pendingNodeSizes = useRef<Map<string, Size>>(new Map());
   const flowInstance = useRef<ReactFlowInstance<TaskFlowNode, Edge> | null>(null);
+  const updateData = useCallback((update: (current: TaskData) => TaskData) => {
+    dispatchHistory({ type: "update", update });
+  }, []);
 
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(STORAGE_KEY);
-      if (saved) setData(JSON.parse(saved) as TaskData);
+      if (saved) dispatchHistory({ type: "reset", data: JSON.parse(saved) as TaskData });
     } catch {
       // Keep the sample data if saved data is unavailable or malformed.
     }
@@ -492,15 +539,16 @@ export default function TaskApp() {
       const target = event.target as HTMLElement | null;
       if (target?.matches("input, textarea, [contenteditable='true']")) return;
       event.preventDefault();
-      setData((current) => ({
-        ...current,
-        dependencies: current.dependencies.filter((edge) => edge.id !== selectedEdgeId),
-      }));
+      updateData((current) => {
+        const dependencies = current.dependencies.filter((edge) => edge.id !== selectedEdgeId);
+        if (dependencies.length === current.dependencies.length) return current;
+        return { ...current, dependencies };
+      });
       setSelectedEdgeId(null);
     };
     window.addEventListener("keydown", handleDelete);
     return () => window.removeEventListener("keydown", handleDelete);
-  }, [selectedEdgeId, view]);
+  }, [selectedEdgeId, updateData, view]);
 
   const showNotice = useCallback((message: string) => {
     setNotice(message);
@@ -518,40 +566,48 @@ export default function TaskApp() {
   }, [data]);
 
   const toggleTask = useCallback((id: string) => {
-    setData((current) => ({
+    updateData((current) => ({
       ...current,
       tasks: current.tasks.map((task) => task.id === id ? { ...task, completed: !task.completed } : task),
     }));
-  }, []);
+  }, [updateData]);
 
   const renameTask = useCallback((id: string, title: string) => {
-    setData((current) => ({
-      ...current,
-      tasks: current.tasks.map((task) => task.id === id ? { ...task, title } : task),
-    }));
-  }, []);
+    updateData((current) => {
+      const task = current.tasks.find((candidate) => candidate.id === id);
+      if (!task || task.title === title) return current;
+      return {
+        ...current,
+        tasks: current.tasks.map((candidate) => candidate.id === id ? { ...candidate, title } : candidate),
+      };
+    });
+  }, [updateData]);
 
   const saveTaskDetails = useCallback((id: string, updates: Pick<Task, "title" | "notes">) => {
-    setData((current) => ({
-      ...current,
-      tasks: current.tasks.map((task) => task.id === id ? { ...task, ...updates } : task),
-    }));
-  }, []);
+    updateData((current) => {
+      const task = current.tasks.find((candidate) => candidate.id === id);
+      if (!task || (task.title === updates.title && (task.notes ?? "") === (updates.notes ?? ""))) return current;
+      return {
+        ...current,
+        tasks: current.tasks.map((candidate) => candidate.id === id ? { ...candidate, ...updates } : candidate),
+      };
+    });
+  }, [updateData]);
 
   const deleteTask = useCallback((id: string) => {
     setInspectedTaskId((inspected) => inspected === id ? null : inspected);
     setSelectedNodeId((selected) => selected === id ? null : selected);
-    setData((current) => ({
+    updateData((current) => ({
       tasks: current.tasks.filter((task) => task.id !== id),
       dependencies: current.dependencies.filter((edge) => edge.source !== id && edge.target !== id),
     }));
-  }, []);
+  }, [updateData]);
 
   const addTask = (event: FormEvent) => {
     event.preventDefault();
     const title = newTask.trim();
     if (!title) return;
-    setData((current) => {
+    updateData((current) => {
       return {
         ...current,
         tasks: [...current.tasks, {
@@ -566,7 +622,7 @@ export default function TaskApp() {
   };
 
   const reorderTasks = useCallback((draggedId: string, targetId: string) => {
-    setData((current) => {
+    updateData((current) => {
       const tasks = [...current.tasks];
       const from = tasks.findIndex((task) => task.id === draggedId);
       const to = tasks.findIndex((task) => task.id === targetId);
@@ -575,7 +631,7 @@ export default function TaskApp() {
       tasks.splice(to, 0, moved);
       return { ...current, tasks };
     });
-  }, []);
+  }, [updateData]);
 
   const taskNodes = useMemo<TaskFlowNode[]>(() => data.tasks.map((task) => ({
     id: task.id,
@@ -615,25 +671,34 @@ export default function TaskApp() {
     pendingNodeSizes.current.clear();
     if (positionSaveTimer.current) clearTimeout(positionSaveTimer.current);
     positionSaveTimer.current = null;
-    setData((current) => ({
-      ...current,
-      tasks: current.tasks.map((task) => ({
-        ...task,
-        ...(positions.has(task.id) ? { position: positions.get(task.id)! } : {}),
-        ...(sizes.has(task.id) ? { size: sizes.get(task.id)! } : {}),
-      })),
-    }));
-  }, []);
+    updateData((current) => {
+      let changed = false;
+      const tasks = current.tasks.map((task) => {
+        const position = positions.get(task.id);
+        const size = sizes.get(task.id);
+        const positionChanged = Boolean(position && (position.x !== task.position.x || position.y !== task.position.y));
+        const sizeChanged = Boolean(size && (size.width !== task.size?.width || size.height !== task.size?.height));
+        if (!positionChanged && !sizeChanged) return task;
+        changed = true;
+        return {
+          ...task,
+          ...(positionChanged ? { position: position! } : {}),
+          ...(sizeChanged ? { size: size! } : {}),
+        };
+      });
+      return changed ? { ...current, tasks } : current;
+    });
+  }, [updateData]);
 
   const handleFlowNodesChange = useCallback((changes: NodeChange<TaskFlowNode>[]) => {
     onFlowNodesChange(changes);
     let layoutChanged = false;
     changes.forEach((change) => {
-      if (change.type === "position" && change.position) {
+      if (change.type === "position" && change.position && (change.dragging || pendingNodePositions.current.has(change.id))) {
         pendingNodePositions.current.set(change.id, change.position);
         layoutChanged = true;
       }
-      if (change.type === "dimensions" && change.dimensions) {
+      if (change.type === "dimensions" && change.dimensions && (change.resizing || pendingNodeSizes.current.has(change.id))) {
         pendingNodeSizes.current.set(change.id, change.dimensions);
         layoutChanged = true;
       }
@@ -647,31 +712,75 @@ export default function TaskApp() {
   const onConnect = useCallback((connection: Connection) => {
     if (!connection.source || !connection.target) return;
     const { source, target } = connection;
-    setData((current) => {
-      if (source === target) {
-        showNotice("A task can’t depend on itself.");
-        return current;
-      }
-      if (current.dependencies.some((edge) => edge.source === source && edge.target === target)) {
-        showNotice("Those tasks are already connected.");
-        return current;
-      }
-      if (hasPath(target, source, current.dependencies)) {
-        showNotice("That connection would create a loop.");
-        return current;
-      }
+    if (source === target) {
+      showNotice("A task can’t depend on itself.");
+      return;
+    }
+    if (data.dependencies.some((edge) => edge.source === source && edge.target === target)) {
+      showNotice("Those tasks are already connected.");
+      return;
+    }
+    if (hasPath(target, source, data.dependencies)) {
+      showNotice("That connection would create a loop.");
+      return;
+    }
+    updateData((current) => {
+      if (
+        source === target
+        || current.dependencies.some((edge) => edge.source === source && edge.target === target)
+        || hasPath(target, source, current.dependencies)
+      ) return current;
       const edge: Dependency = { id: `${source}--${target}--${uid()}`, source, target };
       return { ...current, dependencies: addEdge(edge, current.dependencies) as Dependency[] };
     });
-  }, [showNotice]);
+  }, [data.dependencies, showNotice, updateData]);
 
   const removeEdges = useCallback((edges: Edge[]) => {
     const ids = new Set(edges.map((edge) => edge.id));
-    setData((current) => ({ ...current, dependencies: current.dependencies.filter((edge) => !ids.has(edge.id)) }));
+    updateData((current) => {
+      const dependencies = current.dependencies.filter((edge) => !ids.has(edge.id));
+      if (dependencies.length === current.dependencies.length) return current;
+      return { ...current, dependencies };
+    });
     setSelectedEdgeId(null);
-  }, []);
+  }, [updateData]);
+
+  const undo = useCallback(() => {
+    flushNodeLayout();
+    dispatchHistory({ type: "undo" });
+    setSelectedNodeId(null);
+    setSelectedEdgeId(null);
+  }, [flushNodeLayout]);
+
+  const redo = useCallback(() => {
+    flushNodeLayout();
+    dispatchHistory({ type: "redo" });
+    setSelectedNodeId(null);
+    setSelectedEdgeId(null);
+  }, [flushNodeLayout]);
+
+  useEffect(() => {
+    const handleHistoryShortcut = (event: globalThis.KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+      const target = event.target as Element | null;
+      if (target?.closest("input, textarea, [contenteditable='true']")) return;
+
+      const key = event.key.toLowerCase();
+      const isUndo = key === "z" && !event.shiftKey;
+      const isRedo = (key === "z" && event.shiftKey) || key === "y";
+      if (!isUndo && !isRedo) return;
+
+      event.preventDefault();
+      if (isRedo) redo();
+      else undo();
+    };
+    window.addEventListener("keydown", handleHistoryShortcut);
+    return () => window.removeEventListener("keydown", handleHistoryShortcut);
+  }, [redo, undo]);
 
   const countLabel = data.tasks.length === 1 ? "1 task" : `${data.tasks.length} tasks`;
+  const canUndo = history.past.length > 0;
+  const canRedo = history.future.length > 0;
   const inspectedTask = data.tasks.find((task) => task.id === inspectedTaskId) ?? null;
   const closeInspector = useCallback(() => {
     setInspectedTaskId(null);
@@ -689,7 +798,27 @@ export default function TaskApp() {
           <button type="button" role="tab" aria-selected={view === "list"} className={view === "list" ? "active" : ""} onClick={() => setView("list")}>List</button>
           <button type="button" role="tab" aria-selected={view === "graph"} className={view === "graph" ? "active" : ""} onClick={() => setView("graph")}>Graph</button>
         </div>
-        <span className="task-count">{countLabel}</span>
+        <div className="header-actions">
+          <div className="history-controls" aria-label="History controls">
+            <button
+              type="button"
+              onClick={undo}
+              disabled={!canUndo}
+              aria-label="Undo"
+              aria-keyshortcuts="Meta+Z Control+Z"
+              title="Undo (⌘Z / Ctrl+Z)"
+            ><UndoIcon /></button>
+            <button
+              type="button"
+              onClick={redo}
+              disabled={!canRedo}
+              aria-label="Redo"
+              aria-keyshortcuts="Meta+Shift+Z Control+Y"
+              title="Redo (⌘⇧Z / Ctrl+Y)"
+            ><RedoIcon /></button>
+          </div>
+          <span className="task-count">{countLabel}</span>
+        </div>
       </header>
 
       <div className="workspace-frame">
@@ -744,7 +873,7 @@ export default function TaskApp() {
                   setSelectedNodeId(null);
                   setSelectedEdgeId(null);
                 }}
-                deleteKeyCode={["Backspace", "Delete"]}
+                deleteKeyCode={null}
                 fitView
                 fitViewOptions={{ padding: 0.14, maxZoom: 1.15 }}
                 minZoom={0.35}

@@ -52,3 +52,19 @@ export function CloseIcon(props: IconProps) {
     </svg>
   );
 }
+
+export function UndoIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 18 18" fill="none" aria-hidden="true" {...props}>
+      <path d="M6.25 5.25 3.5 8l2.75 2.75M4 8h6.1a4.15 4.15 0 0 1 4.15 4.15" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function RedoIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 18 18" fill="none" aria-hidden="true" {...props}>
+      <path d="m11.75 5.25 2.75 2.75-2.75 2.75M14 8H7.9a4.15 4.15 0 0 0-4.15 4.15" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
