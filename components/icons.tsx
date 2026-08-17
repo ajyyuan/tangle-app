@@ -68,3 +68,14 @@ export function RedoIcon(props: IconProps) {
     </svg>
   );
 }
+
+export function ArrangeIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 18 18" fill="none" aria-hidden="true" {...props}>
+      <rect x="2.5" y="3" width="4.5" height="3.5" rx="1" stroke="currentColor" strokeWidth="1.3" />
+      <rect x="11" y="7.25" width="4.5" height="3.5" rx="1" stroke="currentColor" strokeWidth="1.3" />
+      <rect x="2.5" y="11.5" width="4.5" height="3.5" rx="1" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M7.25 4.75h1.1c.9 0 1.65.75 1.65 1.65v3.2c0 .9-.75 1.65-1.65 1.65h-1.1M10 9h1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  );
+}

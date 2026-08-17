@@ -22,7 +22,7 @@ import {
   useNodesState,
 } from "@xyflow/react";
 import { FormEvent, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { CheckIcon, CloseIcon, GripIcon, InfoIcon, PlusIcon, RedoIcon, TrashIcon, UndoIcon } from "./icons";
+import { ArrangeIcon, CheckIcon, CloseIcon, GripIcon, InfoIcon, PlusIcon, RedoIcon, TrashIcon, UndoIcon } from "./icons";
 
 type Point = { x: number; y: number };
 type Size = { width: number; height: number };
@@ -56,6 +56,10 @@ const NODE_MAX_HEIGHT = 320;
 const HISTORY_LIMIT = 100;
 const EDGE_RECONNECT_RADIUS = 18;
 const NODE_CONNECTION_RADIUS = 28;
+const LAYOUT_START_X = 72;
+const LAYOUT_START_Y = 72;
+const LAYOUT_COLUMN_GAP = 120;
+const LAYOUT_ROW_GAP = 46;
 
 const SAMPLE_DATA: TaskData = {
   tasks: [
@@ -162,6 +166,72 @@ function minimumNodeHeight(title: string, width: number) {
 function automaticNodeSize(title: string): Size {
   const width = Math.min(NODE_MAX_AUTO_WIDTH, Math.max(NODE_MIN_WIDTH, Math.ceil(estimatedTextWidth(title) + 58)));
   return { width, height: minimumNodeHeight(title, width) };
+}
+
+function arrangeTasks(tasks: Task[], dependencies: Dependency[]): Task[] {
+  if (!tasks.length) return tasks;
+
+  const taskIds = new Set(tasks.map((task) => task.id));
+  const taskOrder = new Map(tasks.map((task, index) => [task.id, index]));
+  const outgoing = new Map(tasks.map((task) => [task.id, [] as string[]]));
+  const indegree = new Map(tasks.map((task) => [task.id, 0]));
+  const level = new Map(tasks.map((task) => [task.id, 0]));
+
+  dependencies.forEach(({ source, target }) => {
+    if (!taskIds.has(source) || !taskIds.has(target)) return;
+    outgoing.get(source)?.push(target);
+    indegree.set(target, (indegree.get(target) ?? 0) + 1);
+  });
+
+  const ready = tasks.filter((task) => indegree.get(task.id) === 0).map((task) => task.id);
+  for (let index = 0; index < ready.length; index += 1) {
+    const source = ready[index];
+    outgoing.get(source)?.forEach((target) => {
+      level.set(target, Math.max(level.get(target) ?? 0, (level.get(source) ?? 0) + 1));
+      const nextIndegree = (indegree.get(target) ?? 0) - 1;
+      indegree.set(target, nextIndegree);
+      if (nextIndegree === 0) ready.push(target);
+    });
+  }
+
+  const columns = new Map<number, Task[]>();
+  tasks.forEach((task) => {
+    const taskLevel = level.get(task.id) ?? 0;
+    columns.set(taskLevel, [...(columns.get(taskLevel) ?? []), task]);
+  });
+
+  const orderedColumns = [...columns.entries()].sort(([a], [b]) => a - b).map(([columnLevel, columnTasks]) => ({
+    level: columnLevel,
+    tasks: columnTasks.sort((a, b) => a.position.y - b.position.y || (taskOrder.get(a.id) ?? 0) - (taskOrder.get(b.id) ?? 0)),
+  }));
+  const columnHeights = orderedColumns.map(({ tasks: columnTasks }) => columnTasks.reduce((height, task, index) => {
+    const size = task.size ?? automaticNodeSize(task.title);
+    return height + size.height + (index ? LAYOUT_ROW_GAP : 0);
+  }, 0));
+  const tallestColumn = Math.max(...columnHeights);
+  const positions = new Map<string, Point>();
+  let x = LAYOUT_START_X;
+
+  orderedColumns.forEach(({ tasks: columnTasks }, columnIndex) => {
+    let y = LAYOUT_START_Y + (tallestColumn - columnHeights[columnIndex]) / 2;
+    let widestNode = 0;
+    columnTasks.forEach((task) => {
+      const size = task.size ?? automaticNodeSize(task.title);
+      positions.set(task.id, { x, y });
+      y += size.height + LAYOUT_ROW_GAP;
+      widestNode = Math.max(widestNode, size.width);
+    });
+    x += widestNode + LAYOUT_COLUMN_GAP;
+  });
+
+  let changed = false;
+  const arranged = tasks.map((task) => {
+    const position = positions.get(task.id);
+    if (!position || (position.x === task.position.x && position.y === task.position.y)) return task;
+    changed = true;
+    return { ...task, position };
+  });
+  return changed ? arranged : tasks;
 }
 
 function CheckButton({ checked, onClick, label }: { checked: boolean; onClick: () => void; label: string }) {
@@ -592,8 +662,11 @@ export default function TaskApp() {
   const [inspectedTaskId, setInspectedTaskId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [isArranging, setIsArranging] = useState(false);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const positionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const arrangeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const arrangeFrame = useRef<number | null>(null);
   const pendingNodePositions = useRef<Map<string, Point>>(new Map());
   const pendingNodeSizes = useRef<Map<string, Size>>(new Map());
   const flowInstance = useRef<ReactFlowInstance<TaskFlowNode, DependencyFlowEdge> | null>(null);
@@ -626,6 +699,8 @@ export default function TaskApp() {
   useEffect(() => () => {
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
     if (positionSaveTimer.current) clearTimeout(positionSaveTimer.current);
+    if (arrangeTimer.current) clearTimeout(arrangeTimer.current);
+    if (arrangeFrame.current) cancelAnimationFrame(arrangeFrame.current);
   }, []);
 
   useEffect(() => {
@@ -835,6 +910,25 @@ export default function TaskApp() {
     }
   }, [flushNodeLayout, onFlowNodesChange]);
 
+  const arrangeGraph = useCallback(() => {
+    flushNodeLayout();
+    if (arrangeFrame.current) cancelAnimationFrame(arrangeFrame.current);
+    if (arrangeTimer.current) clearTimeout(arrangeTimer.current);
+    setIsArranging(true);
+    arrangeFrame.current = requestAnimationFrame(() => {
+      arrangeFrame.current = null;
+      updateData((current) => {
+        const tasks = arrangeTasks(current.tasks, current.dependencies);
+        return tasks === current.tasks ? current : { ...current, tasks };
+      });
+      arrangeTimer.current = setTimeout(() => {
+        void flowInstance.current?.fitView({ padding: 0.14, maxZoom: 1.15, duration: 320 });
+        setIsArranging(false);
+        arrangeTimer.current = null;
+      }, 360);
+    });
+  }, [flushNodeLayout, updateData]);
+
   const onConnect = useCallback((connection: Connection) => {
     if (!connection.source || !connection.target) return;
     const { source, target } = connection;
@@ -985,7 +1079,7 @@ export default function TaskApp() {
             </form>
           </div>
         ) : (
-          <div className="graph-panel">
+          <div className={`graph-panel ${isArranging ? "is-arranging" : ""}`}>
             {!data.tasks.length ? (
               <div className="graph-empty"><p>Your tasks will appear here.</p><button type="button" onClick={() => setView("list")}>Add a task</button></div>
             ) : (
@@ -1032,6 +1126,13 @@ export default function TaskApp() {
                 <Background color="#d8d9dc" gap={24} size={1} />
                 <Controls showInteractive={false} position="bottom-left" />
               </ReactFlow>
+            )}
+            {!!data.tasks.length && (
+              <div className="graph-actions">
+                <button type="button" onClick={arrangeGraph} disabled={isArranging} title="Arrange by dependencies">
+                  <ArrangeIcon /> Arrange
+                </button>
+              </div>
             )}
             <div className="graph-help">Drag a dot to connect · Click an arrow to adjust it</div>
           </div>
