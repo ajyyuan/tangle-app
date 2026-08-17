@@ -501,7 +501,7 @@ function facingHandles(source: TaskFlowNode, target: TaskFlowNode) {
   return { sourceHandle: `source-${sourceSide}`, targetHandle: `target-${targetSide}` };
 }
 
-function hasPath(from: string, to: string, dependencies: Dependency[]) {
+function hasPath(from: string, to: string, dependencies: Dependency[], ignoredEdgeId?: string) {
   const seen = new Set<string>();
   const queue = [from];
   while (queue.length) {
@@ -509,24 +509,39 @@ function hasPath(from: string, to: string, dependencies: Dependency[]) {
     if (current === to) return true;
     if (seen.has(current)) continue;
     seen.add(current);
-    dependencies.filter((edge) => edge.source === current).forEach((edge) => queue.push(edge.target));
+    dependencies
+      .filter((edge) => edge.id !== ignoredEdgeId && edge.source === current)
+      .forEach((edge) => queue.push(edge.target));
   }
   return false;
 }
 
-type DependencyIssue = "self" | "duplicate" | "cycle" | null;
+function minimalDependencies(dependencies: Dependency[]) {
+  const seenPairs = new Set<string>();
+  const uniqueDependencies = dependencies.filter((edge) => {
+    const pair = `${edge.source}\u0000${edge.target}`;
+    if (seenPairs.has(pair)) return false;
+    seenPairs.add(pair);
+    return true;
+  });
+  return uniqueDependencies.filter((edge) => !hasPath(edge.source, edge.target, uniqueDependencies, edge.id));
+}
+
+type DependencyIssue = "self" | "duplicate" | "cycle" | "implied" | null;
 
 function dependencyIssue(source: string, target: string, dependencies: Dependency[], ignoredEdgeId?: string): DependencyIssue {
   const remaining = ignoredEdgeId ? dependencies.filter((edge) => edge.id !== ignoredEdgeId) : dependencies;
   if (source === target) return "self";
   if (remaining.some((edge) => edge.source === source && edge.target === target)) return "duplicate";
   if (hasPath(target, source, remaining)) return "cycle";
+  if (hasPath(source, target, remaining)) return "implied";
   return null;
 }
 
 function dependencyIssueMessage(issue: Exclude<DependencyIssue, null>) {
   if (issue === "self") return "A task can’t depend on itself.";
   if (issue === "duplicate") return "Those tasks are already connected.";
+  if (issue === "implied") return "Already connected through another task.";
   return "That connection would create a loop.";
 }
 
@@ -771,7 +786,13 @@ export default function TaskApp() {
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(STORAGE_KEY);
-      if (saved) dispatchHistory({ type: "reset", data: JSON.parse(saved) as TaskData });
+      if (saved) {
+        const savedData = JSON.parse(saved) as TaskData;
+        dispatchHistory({
+          type: "reset",
+          data: { ...savedData, dependencies: minimalDependencies(savedData.dependencies) },
+        });
+      }
       const savedDirection = window.localStorage.getItem(LAYOUT_DIRECTION_KEY);
       if (savedDirection === "vertical" || savedDirection === "horizontal") setLayoutDirection(savedDirection);
     } catch {
@@ -1066,11 +1087,15 @@ export default function TaskApp() {
       showNotice(dependencyIssueMessage(issue));
       return;
     }
+    const edge: Dependency = { id: `${source}--${target}--${uid()}`, source, target };
+    const preview = [...data.dependencies, edge];
+    const simplifiesGraph = minimalDependencies(preview).length < preview.length;
     updateData((current) => {
       if (dependencyIssue(source, target, current.dependencies)) return current;
-      const edge: Dependency = { id: `${source}--${target}--${uid()}`, source, target };
-      return { ...current, dependencies: addEdge(edge, current.dependencies) as Dependency[] };
+      const dependencies = addEdge(edge, current.dependencies) as Dependency[];
+      return { ...current, dependencies: minimalDependencies(dependencies) };
     });
+    if (simplifiesGraph) showNotice("Removed an unnecessary connection.");
   }, [data.dependencies, showNotice, updateData]);
 
   const onReconnect = useCallback((oldEdge: DependencyFlowEdge, connection: Connection) => {
@@ -1081,6 +1106,8 @@ export default function TaskApp() {
       showNotice(dependencyIssueMessage(issue));
       return;
     }
+    const preview = data.dependencies.map((edge) => edge.id === oldEdge.id ? { ...edge, source, target } : edge);
+    const simplifiesGraph = minimalDependencies(preview).length < preview.length;
     updateData((current) => {
       if (dependencyIssue(source, target, current.dependencies, oldEdge.id)) return current;
       const index = current.dependencies.findIndex((edge) => edge.id === oldEdge.id);
@@ -1088,9 +1115,10 @@ export default function TaskApp() {
       if (current.dependencies[index].source === source && current.dependencies[index].target === target) return current;
       const dependencies = [...current.dependencies];
       dependencies[index] = { ...dependencies[index], source, target };
-      return { ...current, dependencies };
+      return { ...current, dependencies: minimalDependencies(dependencies) };
     });
     setSelectedEdgeId(oldEdge.id);
+    if (simplifiesGraph) showNotice("Removed an unnecessary connection.");
   }, [data.dependencies, showNotice, updateData]);
 
   const removeEdges = useCallback((edges: Edge[]) => {
