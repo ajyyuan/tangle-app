@@ -41,13 +41,13 @@ type TaskNodeData = {
   title: string;
   completed: boolean;
   blocked: boolean;
-  layoutDirection: LayoutDirection;
   onToggle: (id: string) => void;
   onRename: (id: string, title: string) => void;
 };
 type TaskFlowNode = Node<TaskNodeData, "task">;
 type DependencyEdgeData = { onRemove: (id: string) => void };
 type DependencyFlowEdge = Edge<DependencyEdgeData, "dependency">;
+type ConnectionSide = "top" | "right" | "bottom" | "left";
 
 const STORAGE_KEY = "tangle-task-data-v1";
 const LAYOUT_DIRECTION_KEY = "tangle-layout-direction-v1";
@@ -63,6 +63,12 @@ const LAYOUT_START_X = 72;
 const LAYOUT_START_Y = 72;
 const LAYOUT_LAYER_GAP = 110;
 const LAYOUT_SIBLING_GAP = 46;
+const CONNECTION_SIDES: { side: ConnectionSide; position: Position }[] = [
+  { side: "top", position: Position.Top },
+  { side: "right", position: Position.Right },
+  { side: "bottom", position: Position.Bottom },
+  { side: "left", position: Position.Left },
+];
 
 const SAMPLE_DATA: TaskData = {
   tasks: [
@@ -344,7 +350,6 @@ function InlineTitle({
 
 function TaskNode({ id, data, width }: NodeProps<TaskFlowNode>) {
   const contentHeight = minimumNodeHeight(data.title, width ?? NODE_MIN_WIDTH);
-  const vertical = data.layoutDirection === "vertical";
   return (
     <div className={`task-node ${data.completed ? "is-completed" : ""} ${data.blocked ? "is-blocked" : ""}`}>
       <NodeResizeControl
@@ -355,11 +360,15 @@ function TaskNode({ id, data, width }: NodeProps<TaskFlowNode>) {
         maxWidth={NODE_MAX_WIDTH}
         maxHeight={NODE_MAX_HEIGHT}
       />
-      <Handle
-        type="target"
-        position={vertical ? Position.Top : Position.Left}
-        className={`connection-handle connection-target-${data.layoutDirection}`}
-      />
+      {CONNECTION_SIDES.map(({ side, position }) => (
+        <Handle
+          key={`target-${side}`}
+          id={`target-${side}`}
+          type="target"
+          position={position}
+          className={`connection-handle connection-target-handle connection-handle-${side}`}
+        />
+      ))}
       <div className="task-node-content">
         <CheckButton
           checked={data.completed}
@@ -368,11 +377,15 @@ function TaskNode({ id, data, width }: NodeProps<TaskFlowNode>) {
         />
         <InlineTitle title={data.title} completed={data.completed} onSave={(title) => data.onRename(id, title)} className="node-title" />
       </div>
-      <Handle
-        type="source"
-        position={vertical ? Position.Bottom : Position.Right}
-        className={`connection-handle connection-source-${data.layoutDirection}`}
-      />
+      {CONNECTION_SIDES.map(({ side, position }) => (
+        <Handle
+          key={`source-${side}`}
+          id={`source-${side}`}
+          type="source"
+          position={position}
+          className={`connection-handle connection-source-handle connection-handle-${side}`}
+        />
+      ))}
     </div>
   );
 }
@@ -443,6 +456,42 @@ function offsetPoint(x: number, y: number, position: Position, distance: number)
   if (position === Position.Right) return { x: x + distance, y };
   if (position === Position.Top) return { x, y: y - distance };
   return { x, y: y + distance };
+}
+
+function nodeDimensions(node: TaskFlowNode): Size {
+  const styleWidth = typeof node.style?.width === "number" ? node.style.width : Number.parseFloat(String(node.style?.width ?? ""));
+  const styleHeight = typeof node.style?.height === "number" ? node.style.height : Number.parseFloat(String(node.style?.height ?? ""));
+  return {
+    width: node.measured?.width ?? node.width ?? (Number.isFinite(styleWidth) ? styleWidth : NODE_MIN_WIDTH),
+    height: node.measured?.height ?? node.height ?? (Number.isFinite(styleHeight) ? styleHeight : NODE_MIN_HEIGHT),
+  };
+}
+
+function facingHandles(source: TaskFlowNode, target: TaskFlowNode) {
+  const sourceSize = nodeDimensions(source);
+  const targetSize = nodeDimensions(target);
+  const sourceCenter = {
+    x: source.position.x + sourceSize.width / 2,
+    y: source.position.y + sourceSize.height / 2,
+  };
+  const targetCenter = {
+    x: target.position.x + targetSize.width / 2,
+    y: target.position.y + targetSize.height / 2,
+  };
+  const dx = targetCenter.x - sourceCenter.x;
+  const dy = targetCenter.y - sourceCenter.y;
+  const horizontalScore = Math.abs(dx) / Math.max(1, (sourceSize.width + targetSize.width) / 2);
+  const verticalScore = Math.abs(dy) / Math.max(1, (sourceSize.height + targetSize.height) / 2);
+
+  if (horizontalScore > verticalScore) {
+    const sourceSide: ConnectionSide = dx >= 0 ? "right" : "left";
+    const targetSide: ConnectionSide = dx >= 0 ? "left" : "right";
+    return { sourceHandle: `source-${sourceSide}`, targetHandle: `target-${targetSide}` };
+  }
+
+  const sourceSide: ConnectionSide = dy >= 0 ? "bottom" : "top";
+  const targetSide: ConnectionSide = dy >= 0 ? "top" : "bottom";
+  return { sourceHandle: `source-${sourceSide}`, targetHandle: `target-${targetSide}` };
 }
 
 function hasPath(from: string, to: string, dependencies: Dependency[]) {
@@ -891,11 +940,10 @@ export default function TaskApp() {
       title: task.title,
       completed: task.completed,
       blocked: blockedIds.has(task.id),
-      layoutDirection,
       onToggle: toggleTask,
       onRename: renameTask,
     },
-  })), [data.tasks, blockedIds, layoutDirection, selectedTaskId, toggleTask, renameTask]);
+  })), [data.tasks, blockedIds, selectedTaskId, toggleTask, renameTask]);
 
   const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<TaskFlowNode>(taskNodes);
 
@@ -912,19 +960,26 @@ export default function TaskApp() {
     setSelectedEdgeId(null);
   }, [updateData]);
 
-  const flowEdges = useMemo<DependencyFlowEdge[]>(() => data.dependencies.map((edge) => {
-    const selected = edge.id === selectedEdgeId;
-    return {
-      ...edge,
-      selected,
-      type: "dependency",
-      reconnectable: selected,
-      data: { onRemove: removeDependency },
-      markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: selected ? "#3478f6" : "#a4a9b3" },
-      style: { stroke: "#a4a9b3", strokeWidth: 1.35 },
-      interactionWidth: 26,
-    };
-  }), [data.dependencies, removeDependency, selectedEdgeId]);
+  const flowEdges = useMemo<DependencyFlowEdge[]>(() => {
+    const nodesById = new Map(flowNodes.map((node) => [node.id, node]));
+    return data.dependencies.map((edge) => {
+      const selected = edge.id === selectedEdgeId;
+      const sourceNode = nodesById.get(edge.source);
+      const targetNode = nodesById.get(edge.target);
+      const handles = sourceNode && targetNode ? facingHandles(sourceNode, targetNode) : {};
+      return {
+        ...edge,
+        ...handles,
+        selected,
+        type: "dependency",
+        reconnectable: selected,
+        data: { onRemove: removeDependency },
+        markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: selected ? "#3478f6" : "#a4a9b3" },
+        style: { stroke: "#a4a9b3", strokeWidth: 1.35 },
+        interactionWidth: 26,
+      };
+    });
+  }, [data.dependencies, flowNodes, removeDependency, selectedEdgeId]);
 
   const flushNodeLayout = useCallback(() => {
     if (!pendingNodePositions.current.size && !pendingNodeSizes.current.size) return;

@@ -142,10 +142,16 @@ button { color: inherit; }
 .connection-handle::after { content: ""; position: absolute; left: 50%; top: 50%; width: 9px; height: 9px; border: 2px solid white; border-radius: 50%; background: #9fa3aa; opacity: .22; transform: translate(-50%, -50%); transition: opacity 120ms ease, background 120ms ease, transform 120ms ease, box-shadow 120ms ease; }
 .task-node:hover .connection-handle::after, .react-flow__node.selected .connection-handle::after { opacity: 1; }
 .connection-handle:hover::after, .connection-handle.clickconnecting::after, .connection-handle.connectingfrom::after, .connection-handle.connectingto::after, .connection-handle.valid::after { opacity: 1; background: var(--blue); transform: translate(-50%, -50%) scale(1.18); box-shadow: 0 0 0 4px rgba(52,120,246,.1); }
-.connection-target-horizontal { left: -5px !important; }
-.connection-source-horizontal { right: -5px !important; }
-.connection-target-vertical { top: -5px !important; }
-.connection-source-vertical { bottom: -5px !important; }
+.connection-target-handle { z-index: 2; }
+.connection-source-handle { z-index: 3; }
+.react-flow:has(.connection-source-handle.clickconnecting) .connection-target-handle,
+.react-flow:has(.connection-source-handle.connectingfrom) .connection-target-handle { z-index: 4; }
+.connection-target-handle::after { opacity: 0; }
+.connection-target-handle.connectingto::after, .connection-target-handle.valid::after { opacity: 1; background: var(--blue); transform: translate(-50%, -50%) scale(1.18); box-shadow: 0 0 0 4px rgba(52,120,246,.1); }
+.connection-handle-top { top: -5px !important; }
+.connection-handle-right { right: -5px !important; }
+.connection-handle-bottom { bottom: -5px !important; }
+.connection-handle-left { left: -5px !important; }
 .react-flow__edge-path { transition: stroke 120ms ease, stroke-width 120ms ease; }
 .react-flow__edge:hover .react-flow__edge-path, .react-flow__edge.selected .react-flow__edge-path { stroke: var(--blue) !important; stroke-width: 2 !important; }
 .react-flow__edge.selected .react-flow__edge-path { filter: drop-shadow(0 0 2px rgba(52,120,246,.25)); }
