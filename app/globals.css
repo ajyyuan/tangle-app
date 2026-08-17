@@ -136,14 +136,24 @@ button { color: inherit; }
 .node-resize-control { width: 10px !important; height: 10px !important; right: -5px !important; bottom: -5px !important; z-index: 4; border: 2px solid white !important; border-radius: 3px !important; background: var(--blue) !important; box-shadow: 0 0 0 1px rgba(52,120,246,.28); cursor: nwse-resize; opacity: 0; pointer-events: none; transition: opacity 100ms ease; }
 .task-node:hover .node-resize-control, .node-resize-control:active { opacity: 1; pointer-events: all; }
 
-.connection-handle { width: 9px !important; height: 9px !important; min-width: 9px !important; min-height: 9px !important; border: 2px solid white !important; background: #9fa3aa !important; opacity: .2; transition: opacity 120ms ease, background 120ms ease, transform 120ms ease; }
-.task-node:hover .connection-handle, .react-flow__node.selected .connection-handle { opacity: 1; }
-.connection-handle:hover { background: var(--blue) !important; transform: scale(1.2); }
+.connection-handle { width: 28px !important; height: 28px !important; min-width: 28px !important; min-height: 28px !important; border: 0 !important; background: transparent !important; }
+.connection-handle::after { content: ""; position: absolute; left: 50%; top: 50%; width: 9px; height: 9px; border: 2px solid white; border-radius: 50%; background: #9fa3aa; opacity: .22; transform: translate(-50%, -50%); transition: opacity 120ms ease, background 120ms ease, transform 120ms ease, box-shadow 120ms ease; }
+.task-node:hover .connection-handle::after, .react-flow__node.selected .connection-handle::after { opacity: 1; }
+.connection-handle:hover::after, .connection-handle.clickconnecting::after, .connection-handle.connectingfrom::after, .connection-handle.connectingto::after, .connection-handle.valid::after { opacity: 1; background: var(--blue); transform: translate(-50%, -50%) scale(1.18); box-shadow: 0 0 0 4px rgba(52,120,246,.1); }
 .connection-target { left: -5px !important; }
 .connection-source { right: -5px !important; }
 .react-flow__edge-path { transition: stroke 120ms ease, stroke-width 120ms ease; }
 .react-flow__edge:hover .react-flow__edge-path, .react-flow__edge.selected .react-flow__edge-path { stroke: var(--blue) !important; stroke-width: 2 !important; }
 .react-flow__edge.selected .react-flow__edge-path { filter: drop-shadow(0 0 2px rgba(52,120,246,.25)); }
+.edge-endpoint-indicator { fill: white; stroke: var(--blue); stroke-width: 1.8; pointer-events: none; filter: drop-shadow(0 1px 1px rgba(20,24,32,.12)); }
+.react-flow__edgeupdater { cursor: grab; }
+.react-flow__edgeupdater:active { cursor: grabbing; }
+.connection-toolbar { animation: connection-tool-in 120ms ease-out; }
+.connection-toolbar button { width: 27px; height: 27px; padding: 0; display: grid; place-items: center; border: 1px solid #dedfdf; border-radius: 50%; background: rgba(255,255,255,.98); color: #8d8f94; box-shadow: 0 2px 7px rgba(20,24,32,.12); cursor: pointer; transition: color 120ms ease, border-color 120ms ease, background 120ms ease, transform 100ms ease; }
+.connection-toolbar button:hover { color: var(--danger); border-color: #edcaca; background: #fffafa; }
+.connection-toolbar button:active { transform: scale(.93); }
+.connection-toolbar button:focus-visible { outline: 3px solid rgba(52,120,246,.18); outline-offset: 2px; }
+.connection-toolbar svg { width: 14px; height: 14px; }
 .react-flow__controls { overflow: hidden; border: 1px solid #dedFdf; border-radius: 7px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
 .react-flow__controls-button { width: 30px; height: 30px; border-bottom-color: #e7e7e5; color: #676a70; }
 .react-flow__controls-button:hover { background: #f6f6f4; }
@@ -180,6 +190,7 @@ button { color: inherit; }
 .delete-confirmation .confirm-delete:hover { background: #c94646; }
 
 @keyframes inspector-in { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes connection-tool-in { from { opacity: 0; } to { opacity: 1; } }
 
 .notice { position: fixed; left: 50%; bottom: 28px; z-index: 50; transform: translate(-50%, 12px); padding: 9px 12px; background: #252629; color: white; border-radius: 7px; box-shadow: 0 5px 20px rgba(0,0,0,.16); font-size: 12px; opacity: 0; pointer-events: none; transition: opacity 160ms ease, transform 160ms ease; }
 .notice.is-visible { opacity: 1; transform: translate(-50%, 0); }

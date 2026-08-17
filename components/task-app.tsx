@@ -3,9 +3,13 @@
 import {
   addEdge,
   Background,
+  BaseEdge,
   Connection,
   Controls,
   Edge,
+  EdgeProps,
+  EdgeToolbar,
+  getSmoothStepPath,
   Handle,
   MarkerType,
   Node,
@@ -40,6 +44,8 @@ type TaskNodeData = {
   onRename: (id: string, title: string) => void;
 };
 type TaskFlowNode = Node<TaskNodeData, "task">;
+type DependencyEdgeData = { onRemove: (id: string) => void };
+type DependencyFlowEdge = Edge<DependencyEdgeData, "dependency">;
 
 const STORAGE_KEY = "tangle-task-data-v1";
 const NODE_MIN_WIDTH = 230;
@@ -48,6 +54,8 @@ const NODE_MAX_WIDTH = 560;
 const NODE_MIN_HEIGHT = 52;
 const NODE_MAX_HEIGHT = 320;
 const HISTORY_LIMIT = 100;
+const EDGE_RECONNECT_RADIUS = 18;
+const NODE_CONNECTION_RADIUS = 28;
 
 const SAMPLE_DATA: TaskData = {
   tasks: [
@@ -266,6 +274,72 @@ function TaskNode({ id, data, width }: NodeProps<TaskFlowNode>) {
 
 const nodeTypes = { task: TaskNode };
 
+function DependencyEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  markerEnd,
+  style,
+  selected,
+  data,
+  interactionWidth,
+}: EdgeProps<DependencyFlowEdge>) {
+  const [path, labelX, labelY] = getSmoothStepPath({
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    sourcePosition,
+    targetPosition,
+  });
+  const sourceHandle = offsetPoint(sourceX, sourceY, sourcePosition, EDGE_RECONNECT_RADIUS);
+  const targetHandle = offsetPoint(targetX, targetY, targetPosition, EDGE_RECONNECT_RADIUS);
+
+  return (
+    <>
+      <BaseEdge
+        id={id}
+        path={path}
+        markerEnd={markerEnd}
+        style={style}
+        interactionWidth={interactionWidth}
+      />
+      {selected && (
+        <>
+          <circle className="edge-endpoint-indicator" cx={sourceHandle.x} cy={sourceHandle.y} r={5} />
+          <circle className="edge-endpoint-indicator" cx={targetHandle.x} cy={targetHandle.y} r={5} />
+        </>
+      )}
+      <EdgeToolbar edgeId={id} x={labelX} y={labelY} isVisible={selected} className="connection-toolbar nodrag nopan">
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            data?.onRemove(id);
+          }}
+          aria-label="Remove connection"
+          title="Remove connection"
+        >
+          <TrashIcon />
+        </button>
+      </EdgeToolbar>
+    </>
+  );
+}
+
+const edgeTypes = { dependency: DependencyEdge };
+
+function offsetPoint(x: number, y: number, position: Position, distance: number): Point {
+  if (position === Position.Left) return { x: x - distance, y };
+  if (position === Position.Right) return { x: x + distance, y };
+  if (position === Position.Top) return { x, y: y - distance };
+  return { x, y: y + distance };
+}
+
 function hasPath(from: string, to: string, dependencies: Dependency[]) {
   const seen = new Set<string>();
   const queue = [from];
@@ -277,6 +351,22 @@ function hasPath(from: string, to: string, dependencies: Dependency[]) {
     dependencies.filter((edge) => edge.source === current).forEach((edge) => queue.push(edge.target));
   }
   return false;
+}
+
+type DependencyIssue = "self" | "duplicate" | "cycle" | null;
+
+function dependencyIssue(source: string, target: string, dependencies: Dependency[], ignoredEdgeId?: string): DependencyIssue {
+  const remaining = ignoredEdgeId ? dependencies.filter((edge) => edge.id !== ignoredEdgeId) : dependencies;
+  if (source === target) return "self";
+  if (remaining.some((edge) => edge.source === source && edge.target === target)) return "duplicate";
+  if (hasPath(target, source, remaining)) return "cycle";
+  return null;
+}
+
+function dependencyIssueMessage(issue: Exclude<DependencyIssue, null>) {
+  if (issue === "self") return "A task can’t depend on itself.";
+  if (issue === "duplicate") return "Those tasks are already connected.";
+  return "That connection would create a loop.";
 }
 
 function ListView({
@@ -501,7 +591,7 @@ export default function TaskApp() {
   const positionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingNodePositions = useRef<Map<string, Point>>(new Map());
   const pendingNodeSizes = useRef<Map<string, Size>>(new Map());
-  const flowInstance = useRef<ReactFlowInstance<TaskFlowNode, Edge> | null>(null);
+  const flowInstance = useRef<ReactFlowInstance<TaskFlowNode, DependencyFlowEdge> | null>(null);
   const updateData = useCallback((update: (current: TaskData) => TaskData) => {
     dispatchHistory({ type: "update", update });
   }, []);
@@ -654,14 +744,28 @@ export default function TaskApp() {
     setFlowNodes(taskNodes);
   }, [taskNodes, setFlowNodes]);
 
-  const flowEdges = useMemo<Edge[]>(() => data.dependencies.map((edge) => ({
-    ...edge,
-    selected: edge.id === selectedEdgeId,
-    type: "smoothstep",
-    markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: "#a4a9b3" },
-    style: { stroke: "#a4a9b3", strokeWidth: 1.35 },
-    interactionWidth: 22,
-  })), [data.dependencies, selectedEdgeId]);
+  const removeDependency = useCallback((id: string) => {
+    updateData((current) => {
+      const dependencies = current.dependencies.filter((edge) => edge.id !== id);
+      if (dependencies.length === current.dependencies.length) return current;
+      return { ...current, dependencies };
+    });
+    setSelectedEdgeId(null);
+  }, [updateData]);
+
+  const flowEdges = useMemo<DependencyFlowEdge[]>(() => data.dependencies.map((edge) => {
+    const selected = edge.id === selectedEdgeId;
+    return {
+      ...edge,
+      selected,
+      type: "dependency",
+      reconnectable: selected,
+      data: { onRemove: removeDependency },
+      markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: selected ? "#3478f6" : "#a4a9b3" },
+      style: { stroke: "#a4a9b3", strokeWidth: 1.35 },
+      interactionWidth: 26,
+    };
+  }), [data.dependencies, removeDependency, selectedEdgeId]);
 
   const flushNodeLayout = useCallback(() => {
     if (!pendingNodePositions.current.size && !pendingNodeSizes.current.size) return;
@@ -712,27 +816,36 @@ export default function TaskApp() {
   const onConnect = useCallback((connection: Connection) => {
     if (!connection.source || !connection.target) return;
     const { source, target } = connection;
-    if (source === target) {
-      showNotice("A task can’t depend on itself.");
-      return;
-    }
-    if (data.dependencies.some((edge) => edge.source === source && edge.target === target)) {
-      showNotice("Those tasks are already connected.");
-      return;
-    }
-    if (hasPath(target, source, data.dependencies)) {
-      showNotice("That connection would create a loop.");
+    const issue = dependencyIssue(source, target, data.dependencies);
+    if (issue) {
+      showNotice(dependencyIssueMessage(issue));
       return;
     }
     updateData((current) => {
-      if (
-        source === target
-        || current.dependencies.some((edge) => edge.source === source && edge.target === target)
-        || hasPath(target, source, current.dependencies)
-      ) return current;
+      if (dependencyIssue(source, target, current.dependencies)) return current;
       const edge: Dependency = { id: `${source}--${target}--${uid()}`, source, target };
       return { ...current, dependencies: addEdge(edge, current.dependencies) as Dependency[] };
     });
+  }, [data.dependencies, showNotice, updateData]);
+
+  const onReconnect = useCallback((oldEdge: DependencyFlowEdge, connection: Connection) => {
+    if (!connection.source || !connection.target) return;
+    const { source, target } = connection;
+    const issue = dependencyIssue(source, target, data.dependencies, oldEdge.id);
+    if (issue) {
+      showNotice(dependencyIssueMessage(issue));
+      return;
+    }
+    updateData((current) => {
+      if (dependencyIssue(source, target, current.dependencies, oldEdge.id)) return current;
+      const index = current.dependencies.findIndex((edge) => edge.id === oldEdge.id);
+      if (index < 0) return current;
+      if (current.dependencies[index].source === source && current.dependencies[index].target === target) return current;
+      const dependencies = [...current.dependencies];
+      dependencies[index] = { ...dependencies[index], source, target };
+      return { ...current, dependencies };
+    });
+    setSelectedEdgeId(oldEdge.id);
   }, [data.dependencies, showNotice, updateData]);
 
   const removeEdges = useCallback((edges: Edge[]) => {
@@ -853,10 +966,14 @@ export default function TaskApp() {
                 nodes={flowNodes}
                 edges={flowEdges}
                 nodeTypes={nodeTypes}
+                edgeTypes={edgeTypes}
                 onInit={(instance) => { flowInstance.current = instance; }}
                 onNodesChange={handleFlowNodesChange}
                 onNodeDragStop={flushNodeLayout}
                 onConnect={onConnect}
+                connectionRadius={NODE_CONNECTION_RADIUS}
+                onReconnect={onReconnect}
+                reconnectRadius={EDGE_RECONNECT_RADIUS}
                 onEdgesDelete={removeEdges}
                 onNodeClick={(_, node) => {
                   setSelectedNodeId(node.id);
@@ -867,7 +984,6 @@ export default function TaskApp() {
                   event.stopPropagation();
                   setSelectedNodeId(null);
                   setSelectedEdgeId(edge.id);
-                  setInspectedTaskId(null);
                 }}
                 onPaneClick={() => {
                   setSelectedNodeId(null);
@@ -880,6 +996,7 @@ export default function TaskApp() {
                 maxZoom={1.8}
                 nodesConnectable
                 nodesDraggable
+                elevateEdgesOnSelect
                 panOnScroll
                 selectionOnDrag={false}
                 proOptions={{ hideAttribution: true }}
@@ -889,7 +1006,7 @@ export default function TaskApp() {
                 <Controls showInteractive={false} position="bottom-left" />
               </ReactFlow>
             )}
-            <div className="graph-help">Drag from a dot to connect tasks · Select an arrow and press Delete to remove it</div>
+            <div className="graph-help">Drag a dot to connect · Click an arrow to adjust it</div>
           </div>
           )}
         </section>
