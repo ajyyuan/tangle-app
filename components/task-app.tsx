@@ -432,7 +432,14 @@ function DependencyEdge({
           <circle className="edge-endpoint-indicator" cx={targetHandle.x} cy={targetHandle.y} r={5} />
         </>
       )}
-      <EdgeToolbar edgeId={id} x={labelX} y={labelY} isVisible={selected} className="connection-toolbar nodrag nopan">
+      <EdgeToolbar
+        edgeId={id}
+        x={labelX}
+        y={labelY}
+        isVisible={selected}
+        className="connection-toolbar nodrag nopan"
+        style={{ zIndex: 2000 }}
+      >
         <button
           type="button"
           onClick={(event) => {
