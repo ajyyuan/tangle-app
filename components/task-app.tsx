@@ -30,14 +30,21 @@ type Size = { width: number; height: number };
 type Task = { id: string; title: string; completed: boolean; position: Point; size?: Size; notes?: string };
 type Dependency = { id: string; source: string; target: string };
 type TaskData = { tasks: Task[]; dependencies: Dependency[] };
-type HistoryState = { past: TaskData[]; present: TaskData; future: TaskData[] };
-type HistoryAction =
-  | { type: "reset"; data: TaskData }
-  | { type: "update"; update: (current: TaskData) => TaskData }
-  | { type: "undo" }
-  | { type: "redo" };
 type View = "list" | "graph";
 type LayoutDirection = "vertical" | "horizontal";
+type LayoutGuide = { id: string; x: number; y: number; width: number; height: number };
+type ArrangementSnapshot = {
+  direction: LayoutDirection;
+  guides: LayoutGuide[];
+  layerByTask: Map<string, number>;
+};
+type HistoryEntry = { data: TaskData; arrangement: ArrangementSnapshot | null };
+type HistoryState = { past: HistoryEntry[]; present: TaskData; future: HistoryEntry[] };
+type HistoryAction =
+  | { type: "reset"; data: TaskData }
+  | { type: "update"; update: (current: TaskData) => TaskData; arrangement: ArrangementSnapshot | null }
+  | { type: "undo"; arrangement: ArrangementSnapshot | null }
+  | { type: "redo"; arrangement: ArrangementSnapshot | null };
 type TaskNodeData = {
   title: string;
   completed: boolean;
@@ -49,7 +56,6 @@ type TaskFlowNode = Node<TaskNodeData, "task">;
 type DependencyEdgeData = { onRemove: (id: string) => void };
 type DependencyFlowEdge = Edge<DependencyEdgeData, "dependency">;
 type ConnectionSide = "top" | "right" | "bottom" | "left";
-type LayoutGuide = { id: string; x: number; y: number; width: number; height: number };
 
 const STORAGE_KEY = "tangle-task-data-v1";
 const LAYOUT_DIRECTION_KEY = "tangle-layout-direction-v1";
@@ -94,7 +100,7 @@ function historyReducer(state: HistoryState, action: HistoryAction): HistoryStat
     const next = action.update(state.present);
     if (next === state.present) return state;
     return {
-      past: [...state.past.slice(-(HISTORY_LIMIT - 1)), state.present],
+      past: [...state.past.slice(-(HISTORY_LIMIT - 1)), { data: state.present, arrangement: action.arrangement }],
       present: next,
       future: [],
     };
@@ -105,16 +111,16 @@ function historyReducer(state: HistoryState, action: HistoryAction): HistoryStat
     if (!previous) return state;
     return {
       past: state.past.slice(0, -1),
-      present: previous,
-      future: [state.present, ...state.future].slice(0, HISTORY_LIMIT),
+      present: previous.data,
+      future: [{ data: state.present, arrangement: action.arrangement }, ...state.future].slice(0, HISTORY_LIMIT),
     };
   }
 
   const next = state.future[0];
   if (!next) return state;
   return {
-    past: [...state.past.slice(-(HISTORY_LIMIT - 1)), state.present],
-    present: next,
+    past: [...state.past.slice(-(HISTORY_LIMIT - 1)), { data: state.present, arrangement: action.arrangement }],
+    present: next.data,
     future: state.future.slice(1),
   };
 }
@@ -317,6 +323,22 @@ function arrangementGuides(tasks: Task[], dependencies: Dependency[], direction:
       height: LAYOUT_GUIDE_EXTENT * 2,
     };
   });
+}
+
+function layerMembership(tasks: Task[], dependencies: Dependency[]) {
+  const membership = new Map<string, number>();
+  layeredTasks(tasks, dependencies).forEach((layerTasks, layerIndex) => {
+    layerTasks.forEach((task) => membership.set(task.id, layerIndex));
+  });
+  return membership;
+}
+
+function cloneArrangement(snapshot: ArrangementSnapshot): ArrangementSnapshot {
+  return {
+    direction: snapshot.direction,
+    guides: snapshot.guides.map((guide) => ({ ...guide })),
+    layerByTask: new Map(snapshot.layerByTask),
+  };
 }
 
 function CheckButton({ checked, onClick, label }: { checked: boolean; onClick: () => void; label: string }) {
@@ -823,6 +845,7 @@ export default function TaskApp() {
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [isArranging, setIsArranging] = useState(false);
   const [arrangedDirection, setArrangedDirection] = useState<LayoutDirection | null>(null);
+  const [layoutGuides, setLayoutGuides] = useState<LayoutGuide[]>([]);
   const [layoutDirection, setLayoutDirection] = useState<LayoutDirection>("vertical");
   const [arrangementOptionsOpen, setArrangementOptionsOpen] = useState(false);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -830,16 +853,35 @@ export default function TaskApp() {
   const arrangeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const arrangeFrame = useRef<number | null>(null);
   const arrangementVersion = useRef(0);
+  const arrangedLayerByTask = useRef<Map<string, number>>(new Map());
+  const activeArrangement = useRef<ArrangementSnapshot | null>(null);
+  const pendingPreviousArrangement = useRef<ArrangementSnapshot | null | undefined>(undefined);
   const arrangementOptionsRef = useRef<HTMLDivElement>(null);
   const pendingNodePositions = useRef<Map<string, Point>>(new Map());
   const pendingNodeSizes = useRef<Map<string, Size>>(new Map());
   const flowInstance = useRef<ReactFlowInstance<TaskFlowNode, DependencyFlowEdge> | null>(null);
   const updateData = useCallback((update: (current: TaskData) => TaskData) => {
-    dispatchHistory({ type: "update", update });
+    const previousArrangement = pendingPreviousArrangement.current !== undefined
+      ? pendingPreviousArrangement.current
+      : activeArrangement.current;
+    pendingPreviousArrangement.current = undefined;
+    dispatchHistory({
+      type: "update",
+      update,
+      arrangement: previousArrangement ? cloneArrangement(previousArrangement) : null,
+    });
   }, []);
   const clearArrangement = useCallback(() => {
     arrangementVersion.current += 1;
+    if (pendingPreviousArrangement.current === undefined) {
+      pendingPreviousArrangement.current = activeArrangement.current
+        ? cloneArrangement(activeArrangement.current)
+        : null;
+    }
+    activeArrangement.current = null;
     setArrangedDirection(null);
+    setLayoutGuides([]);
+    arrangedLayerByTask.current.clear();
     if (arrangeFrame.current) {
       cancelAnimationFrame(arrangeFrame.current);
       arrangeFrame.current = null;
@@ -847,6 +889,31 @@ export default function TaskApp() {
     if (arrangeTimer.current) {
       clearTimeout(arrangeTimer.current);
       arrangeTimer.current = null;
+    }
+    setIsArranging(false);
+  }, []);
+  const restoreArrangement = useCallback((remembered: ArrangementSnapshot | null | undefined) => {
+    arrangementVersion.current += 1;
+    pendingPreviousArrangement.current = undefined;
+    if (arrangeFrame.current) {
+      cancelAnimationFrame(arrangeFrame.current);
+      arrangeFrame.current = null;
+    }
+    if (arrangeTimer.current) {
+      clearTimeout(arrangeTimer.current);
+      arrangeTimer.current = null;
+    }
+    if (remembered) {
+      const snapshot = cloneArrangement(remembered);
+      activeArrangement.current = cloneArrangement(snapshot);
+      setArrangedDirection(snapshot.direction);
+      setLayoutGuides(snapshot.guides);
+      arrangedLayerByTask.current = snapshot.layerByTask;
+    } else {
+      activeArrangement.current = null;
+      setArrangedDirection(null);
+      setLayoutGuides([]);
+      arrangedLayerByTask.current.clear();
     }
     setIsArranging(false);
   }, []);
@@ -1114,31 +1181,62 @@ export default function TaskApp() {
 
   const handleFlowNodesChange = useCallback((changes: NodeChange<TaskFlowNode>[]) => {
     onFlowNodesChange(changes);
-    let layoutChanged = false;
+    let sizeChanged = false;
     changes.forEach((change) => {
       if (change.type === "position" && change.position && (change.dragging || pendingNodePositions.current.has(change.id))) {
         pendingNodePositions.current.set(change.id, change.position);
-        layoutChanged = true;
       }
       if (change.type === "dimensions" && change.dimensions && (change.resizing || pendingNodeSizes.current.has(change.id))) {
         pendingNodeSizes.current.set(change.id, change.dimensions);
-        layoutChanged = true;
+        sizeChanged = true;
       }
     });
-    if (layoutChanged) {
+    if (sizeChanged) {
       clearArrangement();
       if (positionSaveTimer.current) clearTimeout(positionSaveTimer.current);
       positionSaveTimer.current = setTimeout(flushNodeLayout, 140);
     }
   }, [clearArrangement, flushNodeLayout, onFlowNodesChange]);
 
+  const finishNodeDrag = useCallback((node: TaskFlowNode) => {
+    if (arrangedDirection) {
+      const layerIndex = arrangedLayerByTask.current.get(node.id);
+      const guide = layerIndex === undefined ? undefined : layoutGuides[layerIndex];
+      const position = pendingNodePositions.current.get(node.id) ?? node.position;
+      const size = pendingNodeSizes.current.get(node.id) ?? nodeDimensions(node);
+      const center = { x: position.x + size.width / 2, y: position.y + size.height / 2 };
+      const remainsInAssignedLayer = guide ? (arrangedDirection === "vertical"
+        ? center.y >= guide.y && center.y <= guide.y + guide.height
+        : center.x >= guide.x && center.x <= guide.x + guide.width) : false;
+      if (!remainsInAssignedLayer) clearArrangement();
+    }
+    flushNodeLayout();
+  }, [arrangedDirection, clearArrangement, flushNodeLayout, layoutGuides]);
+
   const arrangeGraph = useCallback((direction: LayoutDirection = layoutDirection) => {
     flushNodeLayout();
-    if (arrangeFrame.current) cancelAnimationFrame(arrangeFrame.current);
-    if (arrangeTimer.current) clearTimeout(arrangeTimer.current);
+    if (arrangeFrame.current) {
+      cancelAnimationFrame(arrangeFrame.current);
+      arrangeFrame.current = null;
+    }
+    if (arrangeTimer.current) {
+      clearTimeout(arrangeTimer.current);
+      arrangeTimer.current = null;
+    }
+    const preservesCurrentBands = arrangedDirection === direction && layoutGuides.length > 0;
+    if (preservesCurrentBands) return;
+
     const version = arrangementVersion.current + 1;
     arrangementVersion.current = version;
+    if (pendingPreviousArrangement.current === undefined) {
+      pendingPreviousArrangement.current = activeArrangement.current
+        ? cloneArrangement(activeArrangement.current)
+        : null;
+    }
+    activeArrangement.current = null;
     setArrangedDirection(null);
+    setLayoutGuides([]);
+    arrangedLayerByTask.current.clear();
     setIsArranging(true);
     arrangeFrame.current = requestAnimationFrame(() => {
       arrangeFrame.current = null;
@@ -1151,12 +1249,25 @@ export default function TaskApp() {
         void (async () => {
           await flowInstance.current?.fitView({ padding: 0.14, maxZoom: 1.15, duration: 320 });
           if (arrangementVersion.current !== version) return;
+          const nodesById = new Map(flowInstance.current?.getNodes().map((node) => [node.id, node]) ?? []);
+          const settledTasks = data.tasks.map((task) => {
+            const node = nodesById.get(task.id);
+            return node ? { ...task, position: node.position, size: nodeDimensions(node) } : task;
+          });
+          const snapshot = {
+            direction,
+            guides: arrangementGuides(settledTasks, data.dependencies, direction),
+            layerByTask: layerMembership(settledTasks, data.dependencies),
+          };
+          activeArrangement.current = cloneArrangement(snapshot);
+          setLayoutGuides(snapshot.guides);
+          arrangedLayerByTask.current = snapshot.layerByTask;
           setArrangedDirection(direction);
           setIsArranging(false);
         })();
       }, 360);
     });
-  }, [flushNodeLayout, layoutDirection, updateData]);
+  }, [arrangedDirection, data.dependencies, data.tasks, flushNodeLayout, layoutDirection, layoutGuides.length, updateData]);
 
   const chooseLayoutDirection = useCallback((direction: LayoutDirection) => {
     setLayoutDirection(direction);
@@ -1220,19 +1331,21 @@ export default function TaskApp() {
 
   const undo = useCallback(() => {
     flushNodeLayout();
-    clearArrangement();
-    dispatchHistory({ type: "undo" });
+    const currentArrangement = activeArrangement.current ? cloneArrangement(activeArrangement.current) : null;
+    restoreArrangement(history.past.at(-1)?.arrangement);
+    dispatchHistory({ type: "undo", arrangement: currentArrangement });
     setSelectedTaskId(null);
     setSelectedEdgeId(null);
-  }, [clearArrangement, flushNodeLayout]);
+  }, [flushNodeLayout, history.past, restoreArrangement]);
 
   const redo = useCallback(() => {
     flushNodeLayout();
-    clearArrangement();
-    dispatchHistory({ type: "redo" });
+    const currentArrangement = activeArrangement.current ? cloneArrangement(activeArrangement.current) : null;
+    restoreArrangement(history.future[0]?.arrangement);
+    dispatchHistory({ type: "redo", arrangement: currentArrangement });
     setSelectedTaskId(null);
     setSelectedEdgeId(null);
-  }, [clearArrangement, flushNodeLayout]);
+  }, [flushNodeLayout, history.future, restoreArrangement]);
 
   useEffect(() => {
     const handleHistoryShortcut = (event: globalThis.KeyboardEvent) => {
@@ -1256,10 +1369,6 @@ export default function TaskApp() {
   const countLabel = data.tasks.length === 1 ? "1 task" : `${data.tasks.length} tasks`;
   const canUndo = history.past.length > 0;
   const canRedo = history.future.length > 0;
-  const layoutGuides = useMemo(
-    () => arrangedDirection ? arrangementGuides(data.tasks, data.dependencies, arrangedDirection) : [],
-    [arrangedDirection, data.dependencies, data.tasks],
-  );
   const inspectedTask = data.tasks.find((task) => task.id === inspectedTaskId) ?? null;
   const closeInspector = useCallback(() => {
     setInspectedTaskId(null);
@@ -1340,7 +1449,7 @@ export default function TaskApp() {
                 edgeTypes={edgeTypes}
                 onInit={(instance) => { flowInstance.current = instance; }}
                 onNodesChange={handleFlowNodesChange}
-                onNodeDragStop={flushNodeLayout}
+                onNodeDragStop={(_event, node) => finishNodeDrag(node)}
                 onConnect={onConnect}
                 connectionRadius={NODE_CONNECTION_RADIUS}
                 onReconnect={onReconnect}
