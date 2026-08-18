@@ -745,6 +745,11 @@ function ListView({
           data-task-id={task.id}
           className={`task-row ${task.completed ? "is-completed" : ""} ${blockedIds.has(task.id) ? "is-blocked" : ""} ${inspectedTaskId === task.id ? "is-inspected" : ""} ${selectedTaskId === task.id ? "is-selected" : ""} ${dragged === task.id ? "is-dragging" : ""} ${over === task.id ? "is-drop-target" : ""}`}
           onPointerDownCapture={() => onSelect(task.id)}
+          onDoubleClick={(event) => {
+            const target = event.target as HTMLElement;
+            if (target.closest(".inline-title, .inline-title-input, .row-info, .check-button, .drag-grip")) return;
+            onInspect(task.id);
+          }}
           onPointerDown={(event) => {
             if (!(event.target as HTMLElement).closest(".drag-grip")) return;
             if (event.pointerType === "mouse") return;
