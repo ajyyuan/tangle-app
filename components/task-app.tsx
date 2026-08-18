@@ -20,6 +20,7 @@ import {
   ReactFlow,
   ReactFlowInstance,
   useNodesState,
+  ViewportPortal,
 } from "@xyflow/react";
 import { FormEvent, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { ArrangeIcon, CheckIcon, CloseIcon, GripIcon, InfoIcon, PlusIcon, RedoIcon, SettingsIcon, TrashIcon, UndoIcon } from "./icons";
@@ -48,6 +49,7 @@ type TaskFlowNode = Node<TaskNodeData, "task">;
 type DependencyEdgeData = { onRemove: (id: string) => void };
 type DependencyFlowEdge = Edge<DependencyEdgeData, "dependency">;
 type ConnectionSide = "top" | "right" | "bottom" | "left";
+type LayoutGuide = { id: string; x: number; y: number; width: number; height: number };
 
 const STORAGE_KEY = "tangle-task-data-v1";
 const LAYOUT_DIRECTION_KEY = "tangle-layout-direction-v1";
@@ -63,6 +65,7 @@ const LAYOUT_START_X = 72;
 const LAYOUT_START_Y = 72;
 const LAYOUT_LAYER_GAP = 110;
 const LAYOUT_SIBLING_GAP = 46;
+const LAYOUT_GUIDE_EXTENT = 50_000;
 const CONNECTION_SIDES: { side: ConnectionSide; position: Position }[] = [
   { side: "top", position: Position.Top },
   { side: "right", position: Position.Right },
@@ -177,11 +180,8 @@ function automaticNodeSize(title: string): Size {
   return { width, height: minimumNodeHeight(title, width) };
 }
 
-function arrangeTasks(tasks: Task[], dependencies: Dependency[], direction: LayoutDirection): Task[] {
-  if (!tasks.length) return tasks;
-
+function taskLevels(tasks: Task[], dependencies: Dependency[]) {
   const taskIds = new Set(tasks.map((task) => task.id));
-  const taskOrder = new Map(tasks.map((task, index) => [task.id, index]));
   const outgoing = new Map(tasks.map((task) => [task.id, [] as string[]]));
   const indegree = new Map(tasks.map((task) => [task.id, 0]));
   const level = new Map(tasks.map((task) => [task.id, 0]));
@@ -203,13 +203,27 @@ function arrangeTasks(tasks: Task[], dependencies: Dependency[], direction: Layo
     });
   }
 
+  return level;
+}
+
+function layeredTasks(tasks: Task[], dependencies: Dependency[]) {
+  const level = taskLevels(tasks, dependencies);
   const layers = new Map<number, Task[]>();
+
   tasks.forEach((task) => {
     const taskLevel = level.get(task.id) ?? 0;
     layers.set(taskLevel, [...(layers.get(taskLevel) ?? []), task]);
   });
 
-  const orderedLayers = [...layers.entries()].sort(([a], [b]) => a - b).map(([, layerTasks]) => ({
+  return [...layers.entries()].sort(([a], [b]) => a - b).map(([, layerTasks]) => layerTasks);
+}
+
+function arrangeTasks(tasks: Task[], dependencies: Dependency[], direction: LayoutDirection): Task[] {
+  if (!tasks.length) return tasks;
+
+  const taskOrder = new Map(tasks.map((task, index) => [task.id, index]));
+
+  const orderedLayers = layeredTasks(tasks, dependencies).map((layerTasks) => ({
     tasks: layerTasks.sort((a, b) => {
       const spatialDifference = direction === "vertical" ? a.position.x - b.position.x : a.position.y - b.position.y;
       return spatialDifference || (taskOrder.get(a.id) ?? 0) - (taskOrder.get(b.id) ?? 0);
@@ -264,6 +278,45 @@ function arrangeTasks(tasks: Task[], dependencies: Dependency[], direction: Layo
     return { ...task, position };
   });
   return changed ? arranged : tasks;
+}
+
+function arrangementGuides(tasks: Task[], dependencies: Dependency[], direction: LayoutDirection): LayoutGuide[] {
+  const layers = layeredTasks(tasks, dependencies);
+  if (!layers.length) return [];
+
+  const bounds = layers.map((layerTasks) => layerTasks.reduce((layerBounds, task) => {
+    const size = task.size ?? automaticNodeSize(task.title);
+    return {
+      minX: Math.min(layerBounds.minX, task.position.x),
+      minY: Math.min(layerBounds.minY, task.position.y),
+      maxX: Math.max(layerBounds.maxX, task.position.x + size.width),
+      maxY: Math.max(layerBounds.maxY, task.position.y + size.height),
+    };
+  }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity }));
+
+  return bounds.map((bound, index) => {
+    if (direction === "vertical") {
+      const y = index === 0 ? -LAYOUT_GUIDE_EXTENT : (bounds[index - 1].maxY + bound.minY) / 2;
+      const bottom = index === bounds.length - 1 ? LAYOUT_GUIDE_EXTENT : (bound.maxY + bounds[index + 1].minY) / 2;
+      return {
+        id: `vertical-${index}`,
+        x: -LAYOUT_GUIDE_EXTENT,
+        y,
+        width: LAYOUT_GUIDE_EXTENT * 2,
+        height: bottom - y,
+      };
+    }
+
+    const x = index === 0 ? -LAYOUT_GUIDE_EXTENT : (bounds[index - 1].maxX + bound.minX) / 2;
+    const right = index === bounds.length - 1 ? LAYOUT_GUIDE_EXTENT : (bound.maxX + bounds[index + 1].minX) / 2;
+    return {
+      id: `horizontal-${index}`,
+      x,
+      y: -LAYOUT_GUIDE_EXTENT,
+      width: right - x,
+      height: LAYOUT_GUIDE_EXTENT * 2,
+    };
+  });
 }
 
 function CheckButton({ checked, onClick, label }: { checked: boolean; onClick: () => void; label: string }) {
@@ -769,18 +822,33 @@ export default function TaskApp() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [isArranging, setIsArranging] = useState(false);
+  const [arrangedDirection, setArrangedDirection] = useState<LayoutDirection | null>(null);
   const [layoutDirection, setLayoutDirection] = useState<LayoutDirection>("vertical");
   const [arrangementOptionsOpen, setArrangementOptionsOpen] = useState(false);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const positionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const arrangeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const arrangeFrame = useRef<number | null>(null);
+  const arrangementVersion = useRef(0);
   const arrangementOptionsRef = useRef<HTMLDivElement>(null);
   const pendingNodePositions = useRef<Map<string, Point>>(new Map());
   const pendingNodeSizes = useRef<Map<string, Size>>(new Map());
   const flowInstance = useRef<ReactFlowInstance<TaskFlowNode, DependencyFlowEdge> | null>(null);
   const updateData = useCallback((update: (current: TaskData) => TaskData) => {
     dispatchHistory({ type: "update", update });
+  }, []);
+  const clearArrangement = useCallback(() => {
+    arrangementVersion.current += 1;
+    setArrangedDirection(null);
+    if (arrangeFrame.current) {
+      cancelAnimationFrame(arrangeFrame.current);
+      arrangeFrame.current = null;
+    }
+    if (arrangeTimer.current) {
+      clearTimeout(arrangeTimer.current);
+      arrangeTimer.current = null;
+    }
+    setIsArranging(false);
   }, []);
 
   useEffect(() => {
@@ -835,6 +903,7 @@ export default function TaskApp() {
   }, [inspectedTaskId, view]);
 
   useEffect(() => () => {
+    arrangementVersion.current += 1;
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
     if (positionSaveTimer.current) clearTimeout(positionSaveTimer.current);
     if (arrangeTimer.current) clearTimeout(arrangeTimer.current);
@@ -852,6 +921,7 @@ export default function TaskApp() {
       event.preventDefault();
 
       if (selectedTaskId) {
+        clearArrangement();
         updateData((current) => {
           if (!current.tasks.some((task) => task.id === selectedTaskId)) return current;
           return {
@@ -864,6 +934,7 @@ export default function TaskApp() {
         return;
       }
 
+      clearArrangement();
       updateData((current) => {
         const dependencies = current.dependencies.filter((edge) => edge.id !== selectedEdgeId);
         if (dependencies.length === current.dependencies.length) return current;
@@ -873,7 +944,7 @@ export default function TaskApp() {
     };
     window.addEventListener("keydown", handleDelete);
     return () => window.removeEventListener("keydown", handleDelete);
-  }, [selectedEdgeId, selectedTaskId, updateData, view]);
+  }, [clearArrangement, selectedEdgeId, selectedTaskId, updateData, view]);
 
   const showNotice = useCallback((message: string) => {
     setNotice(message);
@@ -898,6 +969,7 @@ export default function TaskApp() {
   }, [updateData]);
 
   const renameTask = useCallback((id: string, title: string) => {
+    clearArrangement();
     updateData((current) => {
       const task = current.tasks.find((candidate) => candidate.id === id);
       if (!task || task.title === title) return current;
@@ -906,9 +978,10 @@ export default function TaskApp() {
         tasks: current.tasks.map((candidate) => candidate.id === id ? { ...candidate, title } : candidate),
       };
     });
-  }, [updateData]);
+  }, [clearArrangement, updateData]);
 
   const saveTaskDetails = useCallback((id: string, updates: Pick<Task, "title" | "notes">) => {
+    if (data.tasks.find((task) => task.id === id)?.title !== updates.title) clearArrangement();
     updateData((current) => {
       const task = current.tasks.find((candidate) => candidate.id === id);
       if (!task || (task.title === updates.title && (task.notes ?? "") === (updates.notes ?? ""))) return current;
@@ -917,21 +990,23 @@ export default function TaskApp() {
         tasks: current.tasks.map((candidate) => candidate.id === id ? { ...candidate, ...updates } : candidate),
       };
     });
-  }, [updateData]);
+  }, [clearArrangement, data.tasks, updateData]);
 
   const deleteTask = useCallback((id: string) => {
+    clearArrangement();
     setInspectedTaskId((inspected) => inspected === id ? null : inspected);
     setSelectedTaskId((selected) => selected === id ? null : selected);
     updateData((current) => ({
       tasks: current.tasks.filter((task) => task.id !== id),
       dependencies: current.dependencies.filter((edge) => edge.source !== id && edge.target !== id),
     }));
-  }, [updateData]);
+  }, [clearArrangement, updateData]);
 
   const addTask = (event: FormEvent) => {
     event.preventDefault();
     const title = newTask.trim();
     if (!title) return;
+    clearArrangement();
     updateData((current) => {
       return {
         ...current,
@@ -980,13 +1055,14 @@ export default function TaskApp() {
   }, [taskNodes, setFlowNodes]);
 
   const removeDependency = useCallback((id: string) => {
+    clearArrangement();
     updateData((current) => {
       const dependencies = current.dependencies.filter((edge) => edge.id !== id);
       if (dependencies.length === current.dependencies.length) return current;
       return { ...current, dependencies };
     });
     setSelectedEdgeId(null);
-  }, [updateData]);
+  }, [clearArrangement, updateData]);
 
   const flowEdges = useMemo<DependencyFlowEdge[]>(() => {
     const nodesById = new Map(flowNodes.map((node) => [node.id, node]));
@@ -1050,15 +1126,19 @@ export default function TaskApp() {
       }
     });
     if (layoutChanged) {
+      clearArrangement();
       if (positionSaveTimer.current) clearTimeout(positionSaveTimer.current);
       positionSaveTimer.current = setTimeout(flushNodeLayout, 140);
     }
-  }, [flushNodeLayout, onFlowNodesChange]);
+  }, [clearArrangement, flushNodeLayout, onFlowNodesChange]);
 
   const arrangeGraph = useCallback((direction: LayoutDirection = layoutDirection) => {
     flushNodeLayout();
     if (arrangeFrame.current) cancelAnimationFrame(arrangeFrame.current);
     if (arrangeTimer.current) clearTimeout(arrangeTimer.current);
+    const version = arrangementVersion.current + 1;
+    arrangementVersion.current = version;
+    setArrangedDirection(null);
     setIsArranging(true);
     arrangeFrame.current = requestAnimationFrame(() => {
       arrangeFrame.current = null;
@@ -1067,9 +1147,13 @@ export default function TaskApp() {
         return tasks === current.tasks ? current : { ...current, tasks };
       });
       arrangeTimer.current = setTimeout(() => {
-        void flowInstance.current?.fitView({ padding: 0.14, maxZoom: 1.15, duration: 320 });
-        setIsArranging(false);
         arrangeTimer.current = null;
+        void (async () => {
+          await flowInstance.current?.fitView({ padding: 0.14, maxZoom: 1.15, duration: 320 });
+          if (arrangementVersion.current !== version) return;
+          setArrangedDirection(direction);
+          setIsArranging(false);
+        })();
       }, 360);
     });
   }, [flushNodeLayout, layoutDirection, updateData]);
@@ -1090,13 +1174,14 @@ export default function TaskApp() {
     const edge: Dependency = { id: `${source}--${target}--${uid()}`, source, target };
     const preview = [...data.dependencies, edge];
     const simplifiesGraph = minimalDependencies(preview).length < preview.length;
+    clearArrangement();
     updateData((current) => {
       if (dependencyIssue(source, target, current.dependencies)) return current;
       const dependencies = addEdge(edge, current.dependencies) as Dependency[];
       return { ...current, dependencies: minimalDependencies(dependencies) };
     });
     if (simplifiesGraph) showNotice("Removed an unnecessary connection.");
-  }, [data.dependencies, showNotice, updateData]);
+  }, [clearArrangement, data.dependencies, showNotice, updateData]);
 
   const onReconnect = useCallback((oldEdge: DependencyFlowEdge, connection: Connection) => {
     if (!connection.source || !connection.target) return;
@@ -1108,6 +1193,7 @@ export default function TaskApp() {
     }
     const preview = data.dependencies.map((edge) => edge.id === oldEdge.id ? { ...edge, source, target } : edge);
     const simplifiesGraph = minimalDependencies(preview).length < preview.length;
+    clearArrangement();
     updateData((current) => {
       if (dependencyIssue(source, target, current.dependencies, oldEdge.id)) return current;
       const index = current.dependencies.findIndex((edge) => edge.id === oldEdge.id);
@@ -1119,31 +1205,34 @@ export default function TaskApp() {
     });
     setSelectedEdgeId(oldEdge.id);
     if (simplifiesGraph) showNotice("Removed an unnecessary connection.");
-  }, [data.dependencies, showNotice, updateData]);
+  }, [clearArrangement, data.dependencies, showNotice, updateData]);
 
   const removeEdges = useCallback((edges: Edge[]) => {
     const ids = new Set(edges.map((edge) => edge.id));
+    clearArrangement();
     updateData((current) => {
       const dependencies = current.dependencies.filter((edge) => !ids.has(edge.id));
       if (dependencies.length === current.dependencies.length) return current;
       return { ...current, dependencies };
     });
     setSelectedEdgeId(null);
-  }, [updateData]);
+  }, [clearArrangement, updateData]);
 
   const undo = useCallback(() => {
     flushNodeLayout();
+    clearArrangement();
     dispatchHistory({ type: "undo" });
     setSelectedTaskId(null);
     setSelectedEdgeId(null);
-  }, [flushNodeLayout]);
+  }, [clearArrangement, flushNodeLayout]);
 
   const redo = useCallback(() => {
     flushNodeLayout();
+    clearArrangement();
     dispatchHistory({ type: "redo" });
     setSelectedTaskId(null);
     setSelectedEdgeId(null);
-  }, [flushNodeLayout]);
+  }, [clearArrangement, flushNodeLayout]);
 
   useEffect(() => {
     const handleHistoryShortcut = (event: globalThis.KeyboardEvent) => {
@@ -1167,6 +1256,10 @@ export default function TaskApp() {
   const countLabel = data.tasks.length === 1 ? "1 task" : `${data.tasks.length} tasks`;
   const canUndo = history.past.length > 0;
   const canRedo = history.future.length > 0;
+  const layoutGuides = useMemo(
+    () => arrangedDirection ? arrangementGuides(data.tasks, data.dependencies, arrangedDirection) : [],
+    [arrangedDirection, data.dependencies, data.tasks],
+  );
   const inspectedTask = data.tasks.find((task) => task.id === inspectedTaskId) ?? null;
   const closeInspector = useCallback(() => {
     setInspectedTaskId(null);
@@ -1281,6 +1374,24 @@ export default function TaskApp() {
                 proOptions={{ hideAttribution: true }}
                 aria-label="Task connections"
               >
+                {!!layoutGuides.length && (
+                  <ViewportPortal>
+                    <div className={`layout-guides is-${arrangedDirection}`} aria-hidden="true">
+                      {layoutGuides.map((guide, index) => (
+                        <div
+                          key={guide.id}
+                          className={`layout-guide ${index % 2 ? "is-alternate" : ""}`}
+                          data-layer={index + 1}
+                          style={{
+                            width: guide.width,
+                            height: guide.height,
+                            transform: `translate(${guide.x}px, ${guide.y}px)`,
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </ViewportPortal>
+                )}
                 <Background color="#d8d9dc" gap={24} size={1} />
                 <Controls showInteractive={false} position="bottom-left" />
               </ReactFlow>
