@@ -363,6 +363,7 @@ function CheckButton({ checked, onClick, label }: { checked: boolean; onClick: (
         event.stopPropagation();
         onClick();
       }}
+      onDoubleClick={(event) => event.stopPropagation()}
       aria-label={label}
       aria-pressed={checked}
     >
@@ -376,11 +377,13 @@ function InlineTitle({
   completed,
   onSave,
   className = "",
+  editable = true,
 }: {
   title: string;
   completed: boolean;
   onSave: (title: string) => void;
   className?: string;
+  editable?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title);
@@ -400,6 +403,14 @@ function InlineTitle({
     if (clean && clean !== title) onSave(clean);
     else setDraft(title);
   };
+
+  if (!editable) {
+    return (
+      <span className={`inline-title is-static ${completed ? "is-completed" : ""} ${className}`}>
+        {title}
+      </span>
+    );
+  }
 
   if (editing) {
     return (
@@ -520,7 +531,7 @@ function TaskNode({ id, data, width }: NodeProps<TaskFlowNode>) {
           onClick={() => data.onToggle(id)}
           label={data.completed ? `Mark ${data.title} incomplete` : `Complete ${data.title}`}
         />
-        <InlineTitle title={data.title} completed={data.completed} onSave={(title) => data.onRename(id, title)} className="node-title" />
+        <InlineTitle title={data.title} completed={data.completed} onSave={(title) => data.onRename(id, title)} className="node-title" editable={false} />
       </div>
       {CONNECTION_SIDES.map(({ side, position }) => (
         <Handle
@@ -913,6 +924,7 @@ export default function TaskApp() {
   const [newTask, setNewTask] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [inspectedTaskId, setInspectedTaskId] = useState<string | null>(null);
+  const inspectorOpen = inspectedTaskId !== null;
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [graphDraft, setGraphDraft] = useState<GraphDraft | null>(null);
@@ -1049,7 +1061,7 @@ export default function TaskApp() {
       void flowInstance.current?.fitView({ padding: 0.14, maxZoom: 1.15, duration: 180 });
     }, 80);
     return () => clearTimeout(timer);
-  }, [inspectedTaskId, isDesktopWorkspace, view]);
+  }, [inspectorOpen, isDesktopWorkspace, view]);
 
   useEffect(() => () => {
     arrangementVersion.current += 1;
@@ -1524,6 +1536,61 @@ export default function TaskApp() {
     setSelectedTaskId(null);
   }, []);
 
+  const revealTaskOnGraph = useCallback((id: string) => {
+    if (!isDesktopWorkspace) return;
+    window.requestAnimationFrame(() => {
+      const instance = flowInstance.current;
+      const panel = document.querySelector<HTMLElement>(".graph-panel");
+      const node = panel?.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(id)}"]`);
+      if (!instance || !panel || !node) return;
+
+      const panelBounds = panel.getBoundingClientRect();
+      const nodeBounds = node.getBoundingClientRect();
+      const center = {
+        x: nodeBounds.left + nodeBounds.width / 2,
+        y: nodeBounds.top + nodeBounds.height / 2,
+      };
+      const margin = 32;
+      const isVisible = center.x >= panelBounds.left + margin
+        && center.x <= panelBounds.right - margin
+        && center.y >= panelBounds.top + margin
+        && center.y <= panelBounds.bottom - margin;
+      if (isVisible) return;
+
+      const flowCenter = instance.screenToFlowPosition(center);
+      void instance.setCenter(flowCenter.x, flowCenter.y, {
+        zoom: instance.getZoom(),
+        duration: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 220,
+      });
+    });
+  }, [isDesktopWorkspace]);
+
+  const revealTaskInList = useCallback((id: string) => {
+    if (!isDesktopWorkspace || !tasksPaneOpen) return;
+    window.requestAnimationFrame(() => {
+      const pane = document.getElementById("tasks-pane");
+      const row = pane?.querySelector<HTMLElement>(`.task-row[data-task-id="${CSS.escape(id)}"]`);
+      if (!pane || !row) return;
+
+      const paneBounds = pane.getBoundingClientRect();
+      const rowBounds = row.getBoundingClientRect();
+      const margin = 8;
+      const isVisible = rowBounds.top >= paneBounds.top + margin && rowBounds.bottom <= paneBounds.bottom - margin;
+      if (isVisible) return;
+      row.scrollIntoView({
+        block: "nearest",
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+      });
+    });
+  }, [isDesktopWorkspace, tasksPaneOpen]);
+
+  const selectTaskFromList = useCallback((id: string) => {
+    setSelectedTaskId(id);
+    setSelectedEdgeId(null);
+    setInspectedTaskId((inspected) => inspected ? id : null);
+    revealTaskOnGraph(id);
+  }, [revealTaskOnGraph]);
+
   const listPanel = (
     <div className="list-panel">
       <div className="list-heading">
@@ -1536,10 +1603,7 @@ export default function TaskApp() {
         onToggle={toggleTask}
         onRename={renameTask}
         onInspect={setInspectedTaskId}
-        onSelect={(id) => {
-          setSelectedTaskId(id);
-          setSelectedEdgeId(null);
-        }}
+        onSelect={selectTaskFromList}
         onReorder={reorderTasks}
         inspectedTaskId={inspectedTaskId}
         selectedTaskId={selectedTaskId}
@@ -1637,7 +1701,17 @@ export default function TaskApp() {
                   if (event.target instanceof Element && event.target.closest(".react-flow__handle")) return;
                   setSelectedTaskId(node.id);
                   setSelectedEdgeId(null);
+                  setInspectedTaskId((inspected) => inspected ? node.id : null);
+                  revealTaskInList(node.id);
+                }}
+                onNodeDoubleClick={(event, node) => {
+                  if (node.data.draft) return;
+                  if (event.target instanceof Element && event.target.closest(".check-button, .react-flow__handle")) return;
+                  event.stopPropagation();
+                  setSelectedTaskId(node.id);
+                  setSelectedEdgeId(null);
                   setInspectedTaskId(node.id);
+                  revealTaskInList(node.id);
                 }}
                 onEdgeClick={(event, edge) => {
                   event.stopPropagation();
@@ -1742,7 +1816,7 @@ export default function TaskApp() {
               </div>
             )}
             {!!data.tasks.length && (
-              <div className="graph-help">Double-click space to add · Hover to connect · Click arrows to adjust</div>
+              <div className="graph-help">Double-click tasks for details · Double-click space to add · Hover to connect</div>
             )}
           </div>
           )}
