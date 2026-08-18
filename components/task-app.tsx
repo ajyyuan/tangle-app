@@ -27,6 +27,7 @@ import { ArrangeIcon, CheckIcon, CloseIcon, GripIcon, InfoIcon, PlusIcon, RedoIc
 
 type Point = { x: number; y: number };
 type Size = { width: number; height: number };
+type GraphDraft = { id: string; anchor: Point };
 type Task = { id: string; title: string; completed: boolean; position: Point; size?: Size; notes?: string };
 type Dependency = { id: string; source: string; target: string };
 type TaskData = { tasks: Task[]; dependencies: Dependency[] };
@@ -45,13 +46,23 @@ type HistoryAction =
   | { type: "update"; update: (current: TaskData) => TaskData; arrangement: ArrangementSnapshot | null }
   | { type: "undo"; arrangement: ArrangementSnapshot | null }
   | { type: "redo"; arrangement: ArrangementSnapshot | null };
-type TaskNodeData = {
+type PersistedTaskNodeData = {
+  draft: false;
   title: string;
   completed: boolean;
   blocked: boolean;
   onToggle: (id: string) => void;
   onRename: (id: string, title: string) => void;
 };
+type DraftTaskNodeData = {
+  draft: true;
+  title: "";
+  completed: false;
+  blocked: false;
+  onCommit: (title: string) => void;
+  onCancel: () => void;
+};
+type TaskNodeData = PersistedTaskNodeData | DraftTaskNodeData;
 type TaskFlowNode = Node<TaskNodeData, "task">;
 type DependencyEdgeData = { onRemove: (id: string) => void };
 type DependencyFlowEdge = Edge<DependencyEdgeData, "dependency">;
@@ -64,6 +75,7 @@ const NODE_MAX_AUTO_WIDTH = 360;
 const NODE_MAX_WIDTH = 560;
 const NODE_MIN_HEIGHT = 52;
 const NODE_MAX_HEIGHT = 320;
+const NODE_TITLE_OFFSET_X = 43;
 const HISTORY_LIMIT = 100;
 const EDGE_RECONNECT_RADIUS = 18;
 const NODE_CONNECTION_RADIUS = 28;
@@ -423,7 +435,64 @@ function InlineTitle({
   );
 }
 
+function DraftTaskNode({ data }: { data: DraftTaskNodeData }) {
+  const [title, setTitle] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const finished = useRef(false);
+
+  useEffect(() => {
+    const focusInput = () => {
+      const input = inputRef.current;
+      if (!input) return;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    };
+    focusInput();
+    const timer = window.setTimeout(focusInput, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  const finish = (cancel = false) => {
+    if (finished.current) return;
+    finished.current = true;
+    if (cancel || !title.trim()) data.onCancel();
+    else data.onCommit(title);
+  };
+
+  return (
+    <div className="task-node is-draft">
+      <div className="draft-task-content">
+        <span className="draft-task-check" aria-hidden="true" />
+        <input
+          ref={inputRef}
+          autoFocus
+          className="draft-task-input nodrag nopan"
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          onBlur={() => finish()}
+          onClick={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              finish();
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              finish(true);
+            }
+          }}
+          placeholder="Task name"
+          aria-label="New task title"
+        />
+      </div>
+    </div>
+  );
+}
+
 function TaskNode({ id, data, width }: NodeProps<TaskFlowNode>) {
+  if (data.draft) return <DraftTaskNode data={data} />;
+
   const contentHeight = minimumNodeHeight(data.title, width ?? NODE_MIN_WIDTH);
   return (
     <div className={`task-node ${data.completed ? "is-completed" : ""} ${data.blocked ? "is-blocked" : ""}`}>
@@ -843,6 +912,7 @@ export default function TaskApp() {
   const [inspectedTaskId, setInspectedTaskId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [graphDraft, setGraphDraft] = useState<GraphDraft | null>(null);
   const [isArranging, setIsArranging] = useState(false);
   const [arrangedDirection, setArrangedDirection] = useState<LayoutDirection | null>(null);
   const [layoutGuides, setLayoutGuides] = useState<LayoutGuide[]>([]);
@@ -857,6 +927,7 @@ export default function TaskApp() {
   const activeArrangement = useRef<ArrangementSnapshot | null>(null);
   const pendingPreviousArrangement = useRef<ArrangementSnapshot | null | undefined>(undefined);
   const arrangementOptionsRef = useRef<HTMLDivElement>(null);
+  const lastPaneClick = useRef<{ time: number; point: Point } | null>(null);
   const pendingNodePositions = useRef<Map<string, Point>>(new Map());
   const pendingNodeSizes = useRef<Map<string, Size>>(new Map());
   const flowInstance = useRef<ReactFlowInstance<TaskFlowNode, DependencyFlowEdge> | null>(null);
@@ -1088,6 +1159,44 @@ export default function TaskApp() {
     setNewTask("");
   };
 
+  const beginGraphTask = useCallback((screenPoint: Point) => {
+    if (graphDraft || !flowInstance.current) return;
+    const flowPoint = flowInstance.current.screenToFlowPosition(screenPoint);
+    setGraphDraft({
+      id: `draft-${uid()}`,
+      anchor: flowPoint,
+    });
+    setSelectedTaskId(null);
+    setSelectedEdgeId(null);
+  }, [graphDraft]);
+
+  const cancelGraphTask = useCallback(() => {
+    setGraphDraft(null);
+  }, []);
+
+  const commitGraphTask = useCallback((title: string) => {
+    const clean = title.trim();
+    if (!graphDraft || !clean) {
+      setGraphDraft(null);
+      return;
+    }
+
+    const task: Task = {
+      id: graphDraft.id,
+      title: clean,
+      completed: false,
+      position: {
+        x: graphDraft.anchor.x - NODE_TITLE_OFFSET_X,
+        y: graphDraft.anchor.y - NODE_MIN_HEIGHT / 2,
+      },
+    };
+    clearArrangement();
+    setGraphDraft(null);
+    updateData((current) => ({ ...current, tasks: [...current.tasks, task] }));
+    setSelectedTaskId(task.id);
+    setSelectedEdgeId(null);
+  }, [clearArrangement, graphDraft, updateData]);
+
   const reorderTasks = useCallback((draggedId: string, targetId: string) => {
     updateData((current) => {
       const tasks = [...current.tasks];
@@ -1100,20 +1209,49 @@ export default function TaskApp() {
     });
   }, [updateData]);
 
-  const taskNodes = useMemo<TaskFlowNode[]>(() => data.tasks.map((task) => ({
-    id: task.id,
-    type: "task",
-    selected: task.id === selectedTaskId,
-    position: task.position,
-    style: task.size ?? automaticNodeSize(task.title),
-    data: {
-      title: task.title,
-      completed: task.completed,
-      blocked: blockedIds.has(task.id),
-      onToggle: toggleTask,
-      onRename: renameTask,
-    },
-  })), [data.tasks, blockedIds, selectedTaskId, toggleTask, renameTask]);
+  const taskNodes = useMemo<TaskFlowNode[]>(() => {
+    const nodes: TaskFlowNode[] = data.tasks.map((task) => ({
+      id: task.id,
+      type: "task",
+      selected: task.id === selectedTaskId,
+      position: task.position,
+      style: task.size ?? automaticNodeSize(task.title),
+      data: {
+        draft: false,
+        title: task.title,
+        completed: task.completed,
+        blocked: blockedIds.has(task.id),
+        onToggle: toggleTask,
+        onRename: renameTask,
+      },
+    }));
+
+    if (graphDraft) {
+      nodes.push({
+        id: graphDraft.id,
+        type: "task",
+        position: {
+          x: graphDraft.anchor.x - NODE_TITLE_OFFSET_X,
+          y: graphDraft.anchor.y - NODE_MIN_HEIGHT / 2,
+        },
+        style: { width: NODE_MIN_WIDTH, height: NODE_MIN_HEIGHT },
+        draggable: false,
+        selectable: false,
+        connectable: false,
+        deletable: false,
+        data: {
+          draft: true,
+          title: "",
+          completed: false,
+          blocked: false,
+          onCommit: commitGraphTask,
+          onCancel: cancelGraphTask,
+        },
+      });
+    }
+
+    return nodes;
+  }, [blockedIds, cancelGraphTask, commitGraphTask, data.tasks, graphDraft, renameTask, selectedTaskId, toggleTask]);
 
   const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<TaskFlowNode>(taskNodes);
 
@@ -1383,7 +1521,16 @@ export default function TaskApp() {
           <span>Tangle</span>
         </div>
         <div className="view-toggle" role="tablist" aria-label="Choose a view">
-          <button type="button" role="tab" aria-selected={view === "list"} className={view === "list" ? "active" : ""} onClick={() => setView("list")}>List</button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "list"}
+            className={view === "list" ? "active" : ""}
+            onClick={() => {
+              setGraphDraft(null);
+              setView("list");
+            }}
+          >List</button>
           <button type="button" role="tab" aria-selected={view === "graph"} className={view === "graph" ? "active" : ""} onClick={() => setView("graph")}>Graph</button>
         </div>
         <div className="header-actions">
@@ -1439,10 +1586,7 @@ export default function TaskApp() {
           </div>
         ) : (
           <div className={`graph-panel ${isArranging ? "is-arranging" : ""}`}>
-            {!data.tasks.length ? (
-              <div className="graph-empty"><p>Your tasks will appear here.</p><button type="button" onClick={() => setView("list")}>Add a task</button></div>
-            ) : (
-              <ReactFlow
+            <ReactFlow
                 nodes={flowNodes}
                 edges={flowEdges}
                 nodeTypes={nodeTypes}
@@ -1456,6 +1600,7 @@ export default function TaskApp() {
                 reconnectRadius={EDGE_RECONNECT_RADIUS}
                 onEdgesDelete={removeEdges}
                 onNodeClick={(event, node) => {
+                  if (node.data.draft) return;
                   if (event.target instanceof Element && event.target.closest(".react-flow__handle")) return;
                   setSelectedTaskId(node.id);
                   setSelectedEdgeId(null);
@@ -1466,11 +1611,19 @@ export default function TaskApp() {
                   setSelectedTaskId(null);
                   setSelectedEdgeId(edge.id);
                 }}
-                onPaneClick={() => {
+                onPaneClick={(event) => {
                   setSelectedTaskId(null);
                   setSelectedEdgeId(null);
+                  const point = { x: event.clientX, y: event.clientY };
+                  const previous = lastPaneClick.current;
+                  const elapsed = previous ? event.timeStamp - previous.time : Infinity;
+                  const distance = previous ? Math.hypot(point.x - previous.point.x, point.y - previous.point.y) : Infinity;
+                  const isDoubleActivation = event.detail === 2 || (elapsed > 0 && elapsed < 360 && distance < 24);
+                  lastPaneClick.current = isDoubleActivation ? null : { time: event.timeStamp, point };
+                  if (isDoubleActivation) beginGraphTask(point);
                 }}
                 deleteKeyCode={null}
+                zoomOnDoubleClick={false}
                 fitView
                 fitViewOptions={{ padding: 0.14, maxZoom: 1.15 }}
                 minZoom={0.35}
@@ -1481,7 +1634,7 @@ export default function TaskApp() {
                 panOnScroll
                 selectionOnDrag={false}
                 proOptions={{ hideAttribution: true }}
-                aria-label="Task connections"
+                aria-label="Task connections. Double-click empty space to add a task."
               >
                 {!!layoutGuides.length && (
                   <ViewportPortal>
@@ -1503,7 +1656,11 @@ export default function TaskApp() {
                 )}
                 <Background color="#d8d9dc" gap={24} size={1} />
                 <Controls showInteractive={false} position="bottom-left" />
-              </ReactFlow>
+            </ReactFlow>
+            {!data.tasks.length && !graphDraft && (
+              <div className="graph-empty" aria-hidden="true">
+                <p>Double-click anywhere to add a task.</p>
+              </div>
             )}
             {!!data.tasks.length && (
               <div className="graph-actions" ref={arrangementOptionsRef}>
@@ -1551,7 +1708,9 @@ export default function TaskApp() {
                 )}
               </div>
             )}
-            <div className="graph-help">Hover a task to connect · Click an arrow to adjust it</div>
+            {!!data.tasks.length && (
+              <div className="graph-help">Double-click space to add · Hover to connect · Click arrows to adjust</div>
+            )}
           </div>
           )}
         </section>
