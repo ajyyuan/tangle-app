@@ -237,6 +237,38 @@ button { color: inherit; }
 .inspector-field textarea { min-height: 190px; padding: 10px 11px; resize: none; font-size: 13px; line-height: 19px; }
 .inspector-field input:focus, .inspector-field textarea:focus { border-color: #a9c3ef; box-shadow: 0 0 0 3px rgba(52,120,246,.09); }
 .inspector-field textarea::placeholder { color: #b0b2b6; }
+.inspector-notes { margin-bottom: 28px; }
+.inspector-relationships { padding: 19px 0 21px; border-top: 1px solid #e9e9e7; }
+.inspector-section-heading { min-height: 24px; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.inspector-section-heading h3 { margin: 0; color: #74777d; font-size: 11px; font-weight: 640; letter-spacing: .01em; }
+.relationship-add { height: 25px; display: inline-flex; align-items: center; gap: 3px; padding: 0 6px; border: 0; border-radius: 5px; background: transparent; color: var(--blue); font-size: 11px; cursor: pointer; }
+.relationship-add:hover, .relationship-add[aria-expanded="true"] { background: var(--blue-soft); }
+.relationship-add:focus-visible, .relationship-open:focus-visible, .relationship-remove:focus-visible, .relationship-options button:focus-visible { outline: 2px solid rgba(52,120,246,.3); outline-offset: 1px; }
+.relationship-add svg { width: 13px; height: 13px; }
+.inspector-relationship-list { display: flex; flex-direction: column; }
+.inspector-relationship { min-width: 0; height: 35px; display: grid; grid-template-columns: minmax(0, 1fr) 27px; align-items: center; gap: 3px; margin: 0 -5px; padding: 0 3px 0 5px; border-radius: 6px; color: #44474c; font-size: 12px; }
+.inspector-relationship:hover { background: #f3f3f1; }
+.relationship-open { min-width: 0; height: 31px; display: grid; grid-template-columns: 17px minmax(0, 1fr); align-items: center; gap: 8px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: inherit; text-align: left; font: inherit; cursor: pointer; }
+.relationship-open > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inspector-relationship.is-completed .relationship-open > span:last-child { color: #898b90; text-decoration: line-through; text-decoration-color: #b7b8bb; }
+.relationship-status { width: 15px; height: 15px; display: grid; place-items: center; border: 1.25px solid #bfc1c5; border-radius: 50%; color: white; }
+.relationship-status svg { width: 10px; height: 10px; opacity: 0; }
+.inspector-relationship.is-completed .relationship-status, .relationship-status.is-completed { border-color: var(--blue); background: var(--blue); }
+.inspector-relationship.is-completed .relationship-status svg, .relationship-status.is-completed svg { opacity: 1; }
+.relationship-remove { width: 27px; height: 27px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 5px; background: transparent; color: #a3a5aa; cursor: pointer; opacity: 0; transition: opacity 100ms ease, color 100ms ease, background 100ms ease; }
+.inspector-relationship:hover .relationship-remove, .relationship-remove:focus-visible { opacity: 1; }
+.relationship-remove:hover { color: #707278; background: #e8e8e5; }
+.relationship-remove svg { width: 14px; height: 14px; }
+.inspector-relationship-empty { margin: 3px 0 0; color: #a0a2a6; font-size: 11px; line-height: 18px; }
+.relationship-picker { margin: 3px 0 10px; padding: 7px; border: 1px solid #dfe0df; border-radius: 8px; background: white; box-shadow: 0 3px 12px rgba(20,24,32,.07); }
+.relationship-picker > input { width: 100%; height: 31px; padding: 0 8px; border: 1px solid #dedfdf; border-radius: 6px; background: #fbfbfa; color: var(--text); outline: 0; font-size: 12px; }
+.relationship-picker > input:focus { border-color: #a9c3ef; box-shadow: 0 0 0 3px rgba(52,120,246,.08); }
+.relationship-picker > input::placeholder { color: #aaacb0; }
+.relationship-options { max-height: 154px; overflow-y: auto; margin-top: 5px; }
+.relationship-options button { width: 100%; min-width: 0; height: 34px; display: grid; grid-template-columns: 17px minmax(0, 1fr); align-items: center; gap: 8px; padding: 0 7px; border: 0; border-radius: 5px; background: transparent; color: #45474c; text-align: left; font-size: 12px; cursor: pointer; }
+.relationship-options button:hover { background: #f1f4f9; }
+.relationship-options button > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.relationship-options p { margin: 9px 7px 7px; color: #999ba0; font-size: 11px; }
 .inspector-footer { padding: 17px 22px 20px; border-top: 1px solid var(--border); }
 .inspector-delete { height: 32px; display: inline-flex; align-items: center; gap: 7px; padding: 0 8px; margin-left: -8px; border: 0; border-radius: 6px; background: transparent; color: #a95858; font-size: 12px; cursor: pointer; }
 .inspector-delete:hover { background: #fff0f0; color: var(--danger); }

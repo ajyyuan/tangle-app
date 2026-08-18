@@ -822,24 +822,43 @@ function ListView({
 
 function TaskInspector({
   task,
+  tasks,
+  dependencies,
   onSave,
+  onAddDependency,
+  onRemoveDependency,
+  onOpenTask,
   onDelete,
   onClose,
 }: {
   task: Task;
+  tasks: Task[];
+  dependencies: Dependency[];
   onSave: (id: string, updates: Pick<Task, "title" | "notes">) => void;
+  onAddDependency: (sourceId: string, targetId: string) => boolean;
+  onRemoveDependency: (id: string) => void;
+  onOpenTask: (id: string) => void;
   onDelete: (id: string) => void;
   onClose: () => void;
 }) {
   const [title, setTitle] = useState(task.title);
   const [notes, setNotes] = useState(task.notes ?? "");
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [addingRelationship, setAddingRelationship] = useState<"before" | "after" | null>(null);
+  const [relationshipSearch, setRelationshipSearch] = useState("");
+  const relationshipSearchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setTitle(task.title);
     setNotes(task.notes ?? "");
     setConfirmingDelete(false);
+    setAddingRelationship(null);
+    setRelationshipSearch("");
   }, [task.id, task.title, task.notes]);
+
+  useEffect(() => {
+    if (addingRelationship) relationshipSearchRef.current?.focus();
+  }, [addingRelationship]);
 
   const commit = useCallback(() => {
     const cleanTitle = title.trim();
@@ -849,16 +868,109 @@ function TaskInspector({
   useEffect(() => {
     const handleEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (addingRelationship) {
+        setAddingRelationship(null);
+        setRelationshipSearch("");
+        return;
+      }
       commit();
       onClose();
     };
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
-  }, [commit, onClose]);
+  }, [addingRelationship, commit, onClose]);
 
   const close = () => {
     commit();
     onClose();
+  };
+
+  const tasksById = new Map(tasks.map((candidate) => [candidate.id, candidate]));
+  const prerequisites = dependencies.flatMap((dependency) => {
+    if (dependency.target !== task.id) return [];
+    const connectedTask = tasksById.get(dependency.source);
+    return connectedTask ? [{ dependency, task: connectedTask }] : [];
+  });
+  const followingTasks = dependencies.flatMap((dependency) => {
+    if (dependency.source !== task.id) return [];
+    const connectedTask = tasksById.get(dependency.target);
+    return connectedTask ? [{ dependency, task: connectedTask }] : [];
+  });
+  const normalizedSearch = relationshipSearch.trim().toLocaleLowerCase();
+  const availableRelationshipTasks = tasks.filter((candidate) => (
+    candidate.id !== task.id
+    && !dependencyIssue(
+      addingRelationship === "after" ? task.id : candidate.id,
+      addingRelationship === "after" ? candidate.id : task.id,
+      dependencies,
+    )
+    && (!normalizedSearch || candidate.title.toLocaleLowerCase().includes(normalizedSearch))
+  ));
+
+  const relationshipRows = (
+    relationships: { dependency: Dependency; task: Task }[],
+    emptyMessage: string,
+  ) => relationships.length ? (
+    <div className="inspector-relationship-list">
+      {relationships.map(({ dependency, task: connectedTask }) => (
+        <div className={`inspector-relationship ${connectedTask.completed ? "is-completed" : ""}`} key={dependency.id}>
+          <button
+            type="button"
+            className="relationship-open"
+            onClick={() => {
+              commit();
+              onOpenTask(connectedTask.id);
+            }}
+            aria-label={`Open ${connectedTask.title}`}
+          >
+            <span className="relationship-status" aria-hidden="true"><CheckIcon /></span>
+            <span title={connectedTask.title}>{connectedTask.title}</span>
+          </button>
+          <button
+            type="button"
+            className="relationship-remove"
+            onClick={() => onRemoveDependency(dependency.id)}
+            aria-label={`Remove connection to ${connectedTask.title}`}
+            title="Remove"
+          ><CloseIcon /></button>
+        </div>
+      ))}
+    </div>
+  ) : <p className="inspector-relationship-empty">{emptyMessage}</p>;
+
+  const relationshipPicker = (direction: "before" | "after") => {
+    if (addingRelationship !== direction) return null;
+    const sourceId = direction === "before" ? undefined : task.id;
+    const targetId = direction === "before" ? task.id : undefined;
+    return (
+      <div className="relationship-picker" id={`${direction}-task-picker`}>
+        <input
+          ref={relationshipSearchRef}
+          value={relationshipSearch}
+          onChange={(event) => setRelationshipSearch(event.target.value)}
+          placeholder="Search tasks"
+          aria-label={`Search tasks to add ${direction} this one`}
+        />
+        <div className="relationship-options">
+          {availableRelationshipTasks.length ? availableRelationshipTasks.map((candidate) => (
+            <button
+              type="button"
+              key={candidate.id}
+              onClick={() => {
+                if (!onAddDependency(sourceId ?? candidate.id, targetId ?? candidate.id)) return;
+                setAddingRelationship(null);
+                setRelationshipSearch("");
+              }}
+            >
+              <span className={`relationship-status ${candidate.completed ? "is-completed" : ""}`} aria-hidden="true"><CheckIcon /></span>
+              <span>{candidate.title}</span>
+            </button>
+          )) : (
+            <p>{normalizedSearch ? "No matching tasks." : "No available tasks."}</p>
+          )}
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -888,6 +1000,40 @@ function TaskInspector({
             placeholder="Add notes"
           />
         </label>
+        <section className="inspector-relationships" aria-labelledby="before-this-task">
+          <div className="inspector-section-heading">
+            <h3 id="before-this-task">Before this task</h3>
+            <button
+              type="button"
+              className="relationship-add"
+              onClick={() => {
+                setAddingRelationship((open) => open === "before" ? null : "before");
+                setRelationshipSearch("");
+              }}
+              aria-expanded={addingRelationship === "before"}
+              aria-controls="before-task-picker"
+            ><PlusIcon /> Add</button>
+          </div>
+          {relationshipPicker("before")}
+          {relationshipRows(prerequisites, "Nothing needed first.")}
+        </section>
+        <section className="inspector-relationships" aria-labelledby="after-this-task">
+          <div className="inspector-section-heading">
+            <h3 id="after-this-task">After this task</h3>
+            <button
+              type="button"
+              className="relationship-add"
+              onClick={() => {
+                setAddingRelationship((open) => open === "after" ? null : "after");
+                setRelationshipSearch("");
+              }}
+              aria-expanded={addingRelationship === "after"}
+              aria-controls="after-task-picker"
+            ><PlusIcon /> Add</button>
+          </div>
+          {relationshipPicker("after")}
+          {relationshipRows(followingTasks, "No tasks follow this one.")}
+        </section>
       </div>
       <div className="inspector-footer">
         {confirmingDelete ? (
@@ -1440,13 +1586,11 @@ export default function TaskApp() {
     setArrangementOptionsOpen(false);
   }, []);
 
-  const onConnect = useCallback((connection: Connection) => {
-    if (!connection.source || !connection.target) return;
-    const { source, target } = connection;
+  const addDependency = useCallback((source: string, target: string) => {
     const issue = dependencyIssue(source, target, data.dependencies);
     if (issue) {
       showNotice(dependencyIssueMessage(issue));
-      return;
+      return false;
     }
     const edge: Dependency = { id: `${source}--${target}--${uid()}`, source, target };
     const preview = [...data.dependencies, edge];
@@ -1458,7 +1602,13 @@ export default function TaskApp() {
       return { ...current, dependencies: minimalDependencies(dependencies) };
     });
     if (simplifiesGraph) showNotice("Removed an unnecessary connection.");
+    return true;
   }, [clearArrangement, data.dependencies, showNotice, updateData]);
+
+  const onConnect = useCallback((connection: Connection) => {
+    if (!connection.source || !connection.target) return;
+    addDependency(connection.source, connection.target);
+  }, [addDependency]);
 
   const onReconnect = useCallback((oldEdge: DependencyFlowEdge, connection: Connection) => {
     if (!connection.source || !connection.target) return;
@@ -1595,6 +1745,14 @@ export default function TaskApp() {
     setInspectedTaskId((inspected) => inspected ? id : null);
     revealTaskOnGraph(id);
   }, [revealTaskOnGraph]);
+
+  const openTaskFromInspector = useCallback((id: string) => {
+    setSelectedTaskId(id);
+    setSelectedEdgeId(null);
+    setInspectedTaskId(id);
+    revealTaskOnGraph(id);
+    revealTaskInList(id);
+  }, [revealTaskInList, revealTaskOnGraph]);
 
   const listPanel = (
     <div className="list-panel">
@@ -1829,7 +1987,12 @@ export default function TaskApp() {
         {inspectedTask && (
           <TaskInspector
             task={inspectedTask}
+            tasks={data.tasks}
+            dependencies={data.dependencies}
             onSave={saveTaskDetails}
+            onAddDependency={addDependency}
+            onRemoveDependency={removeDependency}
+            onOpenTask={openTaskFromInspector}
             onDelete={deleteTask}
             onClose={closeInspector}
           />
