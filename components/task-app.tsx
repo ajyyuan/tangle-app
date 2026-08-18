@@ -23,7 +23,7 @@ import {
   ViewportPortal,
 } from "@xyflow/react";
 import { FormEvent, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ArrangeIcon, CheckIcon, CloseIcon, GripIcon, InfoIcon, PlusIcon, RedoIcon, SettingsIcon, TrashIcon, UndoIcon } from "./icons";
+import { ArrangeIcon, CheckIcon, CloseIcon, GripIcon, InfoIcon, PlusIcon, RedoIcon, SettingsIcon, SidebarIcon, TrashIcon, UndoIcon } from "./icons";
 
 type Point = { x: number; y: number };
 type Size = { width: number; height: number };
@@ -84,6 +84,7 @@ const LAYOUT_START_Y = 72;
 const LAYOUT_LAYER_GAP = 110;
 const LAYOUT_SIBLING_GAP = 46;
 const LAYOUT_GUIDE_EXTENT = 50_000;
+const DESKTOP_WORKSPACE_QUERY = "(min-width: 1180px)";
 const CONNECTION_SIDES: { side: ConnectionSide; position: Position }[] = [
   { side: "top", position: Position.Top },
   { side: "right", position: Position.Right },
@@ -900,6 +901,8 @@ function TaskInspector({
 
 export default function TaskApp() {
   const [view, setView] = useState<View>("list");
+  const [isDesktopWorkspace, setIsDesktopWorkspace] = useState(false);
+  const [tasksPaneOpen, setTasksPaneOpen] = useState(true);
   const [history, dispatchHistory] = useReducer(historyReducer, {
     past: [],
     present: SAMPLE_DATA,
@@ -990,6 +993,14 @@ export default function TaskApp() {
   }, []);
 
   useEffect(() => {
+    const media = window.matchMedia(DESKTOP_WORKSPACE_QUERY);
+    const updateWorkspaceMode = () => setIsDesktopWorkspace(media.matches);
+    updateWorkspaceMode();
+    media.addEventListener("change", updateWorkspaceMode);
+    return () => media.removeEventListener("change", updateWorkspaceMode);
+  }, []);
+
+  useEffect(() => {
     try {
       const saved = window.localStorage.getItem(STORAGE_KEY);
       if (saved) {
@@ -1033,12 +1044,12 @@ export default function TaskApp() {
   }, [arrangementOptionsOpen]);
 
   useEffect(() => {
-    if (view !== "graph" || !flowInstance.current) return;
+    if ((!isDesktopWorkspace && view !== "graph") || !flowInstance.current) return;
     const timer = setTimeout(() => {
       void flowInstance.current?.fitView({ padding: 0.14, maxZoom: 1.15, duration: 180 });
     }, 80);
     return () => clearTimeout(timer);
-  }, [inspectedTaskId, view]);
+  }, [inspectedTaskId, isDesktopWorkspace, view]);
 
   useEffect(() => () => {
     arrangementVersion.current += 1;
@@ -1051,7 +1062,7 @@ export default function TaskApp() {
   useEffect(() => {
     const handleDelete = (event: globalThis.KeyboardEvent) => {
       if (
-        (!selectedTaskId && (view !== "graph" || !selectedEdgeId))
+        (!selectedTaskId && ((!isDesktopWorkspace && view !== "graph") || !selectedEdgeId))
         || (event.key !== "Delete" && event.key !== "Backspace")
       ) return;
       const target = event.target as Element | null;
@@ -1082,7 +1093,7 @@ export default function TaskApp() {
     };
     window.addEventListener("keydown", handleDelete);
     return () => window.removeEventListener("keydown", handleDelete);
-  }, [clearArrangement, selectedEdgeId, selectedTaskId, updateData, view]);
+  }, [clearArrangement, isDesktopWorkspace, selectedEdgeId, selectedTaskId, updateData, view]);
 
   const showNotice = useCallback((message: string) => {
     setNotice(message);
@@ -1513,26 +1524,69 @@ export default function TaskApp() {
     setSelectedTaskId(null);
   }, []);
 
+  const listPanel = (
+    <div className="list-panel">
+      <div className="list-heading">
+        <h1>Tasks</h1>
+        <p>{data.tasks.filter((task) => !task.completed).length} remaining</p>
+      </div>
+      <ListView
+        tasks={data.tasks}
+        blockedIds={blockedIds}
+        onToggle={toggleTask}
+        onRename={renameTask}
+        onInspect={setInspectedTaskId}
+        onSelect={(id) => {
+          setSelectedTaskId(id);
+          setSelectedEdgeId(null);
+        }}
+        onReorder={reorderTasks}
+        inspectedTaskId={inspectedTaskId}
+        selectedTaskId={selectedTaskId}
+      />
+      <form className="quick-add" onSubmit={addTask}>
+        <PlusIcon />
+        <input value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="New task" aria-label="New task title" />
+        <button type="submit" disabled={!newTask.trim()}>Add</button>
+      </form>
+    </div>
+  );
+
   return (
     <main className="app-shell">
       <header className="app-header">
-        <div className="brand" aria-label="Tangle home">
-          <span className="brand-mark"><CheckIcon /></span>
-          <span>Tangle</span>
+        <div className="header-leading">
+          <div className="brand" aria-label="Tangle home">
+            <span className="brand-mark"><CheckIcon /></span>
+            <span>Tangle</span>
+          </div>
+          {isDesktopWorkspace && (
+            <button
+              type="button"
+              className={`tasks-pane-toggle ${tasksPaneOpen ? "is-active" : ""}`}
+              onClick={() => setTasksPaneOpen((open) => !open)}
+              aria-label={tasksPaneOpen ? "Hide tasks" : "Show tasks"}
+              aria-controls="tasks-pane"
+              aria-expanded={tasksPaneOpen}
+              title={tasksPaneOpen ? "Hide tasks" : "Show tasks"}
+            ><SidebarIcon /></button>
+          )}
         </div>
-        <div className="view-toggle" role="tablist" aria-label="Choose a view">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={view === "list"}
-            className={view === "list" ? "active" : ""}
-            onClick={() => {
-              setGraphDraft(null);
-              setView("list");
-            }}
-          >List</button>
-          <button type="button" role="tab" aria-selected={view === "graph"} className={view === "graph" ? "active" : ""} onClick={() => setView("graph")}>Graph</button>
-        </div>
+        {!isDesktopWorkspace && (
+          <div className="view-toggle" role="tablist" aria-label="Choose a view">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === "list"}
+              className={view === "list" ? "active" : ""}
+              onClick={() => {
+                setGraphDraft(null);
+                setView("list");
+              }}
+            >List</button>
+            <button type="button" role="tab" aria-selected={view === "graph"} className={view === "graph" ? "active" : ""} onClick={() => setView("graph")}>Graph</button>
+          </div>
+        )}
         <div className="header-actions">
           <div className="history-controls" aria-label="History controls">
             <button
@@ -1557,34 +1611,13 @@ export default function TaskApp() {
       </header>
 
       <div className="workspace-frame">
-        <section className={`workspace ${view === "graph" ? "graph-workspace" : "list-workspace"}`}>
-          {view === "list" ? (
-          <div className="list-panel">
-            <div className="list-heading">
-              <h1>Tasks</h1>
-              <p>{data.tasks.filter((task) => !task.completed).length} remaining</p>
-            </div>
-            <ListView
-              tasks={data.tasks}
-              blockedIds={blockedIds}
-              onToggle={toggleTask}
-              onRename={renameTask}
-              onInspect={setInspectedTaskId}
-              onSelect={(id) => {
-                setSelectedTaskId(id);
-                setSelectedEdgeId(null);
-              }}
-              onReorder={reorderTasks}
-              inspectedTaskId={inspectedTaskId}
-              selectedTaskId={selectedTaskId}
-            />
-            <form className="quick-add" onSubmit={addTask}>
-              <PlusIcon />
-              <input value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="New task" aria-label="New task title" />
-              <button type="submit" disabled={!newTask.trim()}>Add</button>
-            </form>
-          </div>
-        ) : (
+        <section className={`workspace ${isDesktopWorkspace ? "unified-workspace" : view === "graph" ? "graph-workspace" : "list-workspace"}`}>
+          {isDesktopWorkspace && tasksPaneOpen && (
+            <aside id="tasks-pane" className="tasks-pane" aria-label="Tasks">
+              {listPanel}
+            </aside>
+          )}
+          {!isDesktopWorkspace && view === "list" ? listPanel : (
           <div className={`graph-panel ${isArranging ? "is-arranging" : ""}`}>
             <ReactFlow
                 nodes={flowNodes}

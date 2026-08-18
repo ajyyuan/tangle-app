@@ -89,3 +89,12 @@ export function SettingsIcon(props: IconProps) {
     </svg>
   );
 }
+
+export function SidebarIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 18 18" fill="none" aria-hidden="true" {...props}>
+      <rect x="2.5" y="3" width="13" height="12" rx="2" stroke="currentColor" strokeWidth="1.35" />
+      <path d="M7 3.5v11" stroke="currentColor" strokeWidth="1.35" />
+    </svg>
+  );
+}
