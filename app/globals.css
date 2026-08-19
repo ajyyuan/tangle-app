@@ -193,8 +193,10 @@ button { color: inherit; }
 }
 .task-row:focus { outline: 0; }
 .task-row:focus-visible { z-index: 2; outline: 1px solid var(--blue-ring); outline-offset: -1px; }
-.task-row::before { content: ""; position: absolute; left: 0; right: 0; top: -1px; height: 2px; background: transparent; }
-.task-row.is-drop-target::before { background: var(--blue); }
+.task-row::before, .task-row::after { content: ""; position: absolute; z-index: 3; left: 14px; right: 2px; height: 2px; border-radius: 999px; background: transparent; pointer-events: none; }
+.task-row::before { top: -1px; }
+.task-row::after { bottom: -1px; }
+.task-row.is-drop-target-before::before, .task-row.is-drop-target-after::after { background: var(--blue); }
 .task-row.is-blocked:not(.is-completed) .inline-title { color: var(--muted); }
 .task-row.is-completed { opacity: 0.58; }
 .task-row.is-settling { z-index: 1; overflow: hidden; animation: task-complete-settle 640ms cubic-bezier(.4, 0, .2, 1) both; }

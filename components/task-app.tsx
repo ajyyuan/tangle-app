@@ -34,6 +34,8 @@ type TaskData = { tasks: Task[]; dependencies: Dependency[] };
 type View = "list" | "graph";
 type Appearance = "system" | "light" | "dark";
 type LayoutDirection = "vertical" | "horizontal";
+type DropPlacement = "before" | "after";
+type DropTarget = { id: string; placement: DropPlacement };
 type LayoutGuide = { id: string; x: number; y: number; width: number; height: number };
 type ArrangementSnapshot = {
   direction: LayoutDirection;
@@ -736,20 +738,24 @@ function ListView({
   onInspect: (id: string) => void;
   onSelect: (id: string) => void;
   onClearSelection: () => void;
-  onReorder: (draggedId: string, targetId: string) => void;
+  onReorder: (draggedId: string, targetId: string, placement: DropPlacement) => void;
   inspectedTaskId: string | null;
   selectedTaskId: string | null;
   quickAdd: ReactNode;
 }) {
   const [dragged, setDragged] = useState<string | null>(null);
-  const [over, setOver] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
   const draggedRef = useRef<string | null>(null);
   const keyboardScopeRef = useRef<HTMLDivElement>(null);
   const activeTasks = tasks.filter((task) => !task.completed || settlingCompletedIds.has(task.id));
   const completedTasks = tasks.filter((task) => task.completed && !settlingCompletedIds.has(task.id));
-  const reorderTargetAt = (x: number, y: number) => document
-    .elementFromPoint(x, y)
-    ?.closest<HTMLElement>(".task-row[data-reorderable='true']");
+  const dropTargetAt = (x: number, y: number, draggedId: string): DropTarget | null => {
+    const row = document.elementFromPoint(x, y)?.closest<HTMLElement>(".task-row[data-reorderable='true']");
+    const id = row?.dataset.taskId;
+    if (!row || !id || id === draggedId) return null;
+    const bounds = row.getBoundingClientRect();
+    return { id, placement: y < bounds.top + bounds.height / 2 ? "before" : "after" };
+  };
   const visibleTaskRows = () => Array.from(keyboardScopeRef.current?.querySelectorAll<HTMLElement>(".task-row") ?? []);
 
   const handleListKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -813,7 +819,7 @@ function ListView({
       data-task-id={task.id}
       data-reorderable={reorderable}
       tabIndex={selectedTaskId === task.id ? 0 : -1}
-      className={`task-row ${task.completed ? "is-completed" : ""} ${settlingCompletedIds.has(task.id) ? "is-settling" : ""} ${blockedIds.has(task.id) ? "is-blocked" : ""} ${inspectedTaskId === task.id ? "is-inspected" : ""} ${selectedTaskId === task.id ? "is-selected" : ""} ${dragged === task.id ? "is-dragging" : ""} ${over === task.id ? "is-drop-target" : ""}`}
+      className={`task-row ${task.completed ? "is-completed" : ""} ${settlingCompletedIds.has(task.id) ? "is-settling" : ""} ${blockedIds.has(task.id) ? "is-blocked" : ""} ${inspectedTaskId === task.id ? "is-inspected" : ""} ${selectedTaskId === task.id ? "is-selected" : ""} ${dragged === task.id ? "is-dragging" : ""} ${dropTarget?.id === task.id ? `is-drop-target-${dropTarget.placement}` : ""}`}
       onPointerDownCapture={() => onSelect(task.id)}
       onFocusCapture={() => {
         if (selectedTaskId !== task.id) onSelect(task.id);
@@ -829,26 +835,26 @@ function ListView({
         event.preventDefault();
         draggedRef.current = task.id;
         setDragged(task.id);
+        setDropTarget(null);
         event.currentTarget.setPointerCapture(event.pointerId);
       }}
       onPointerMove={(event) => {
         if (draggedRef.current !== task.id) return;
-        const targetId = reorderTargetAt(event.clientX, event.clientY)?.dataset.taskId;
-        setOver(targetId && targetId !== task.id ? targetId : null);
+        setDropTarget(dropTargetAt(event.clientX, event.clientY, task.id));
       }}
       onPointerUp={(event) => {
         if (draggedRef.current !== task.id) return;
-        const targetId = reorderTargetAt(event.clientX, event.clientY)?.dataset.taskId;
-        if (targetId && targetId !== task.id) onReorder(task.id, targetId);
+        const target = dropTargetAt(event.clientX, event.clientY, task.id);
+        if (target) onReorder(task.id, target.id, target.placement);
         draggedRef.current = null;
         setDragged(null);
-        setOver(null);
+        setDropTarget(null);
         event.currentTarget.releasePointerCapture(event.pointerId);
       }}
       onPointerCancel={() => {
         draggedRef.current = null;
         setDragged(null);
-        setOver(null);
+        setDropTarget(null);
       }}
     >
       <span
@@ -858,16 +864,16 @@ function ListView({
           event.preventDefault();
           draggedRef.current = task.id;
           setDragged(task.id);
+          setDropTarget(null);
           const handleMove = (moveEvent: MouseEvent) => {
-            const targetId = reorderTargetAt(moveEvent.clientX, moveEvent.clientY)?.dataset.taskId;
-            setOver(targetId && targetId !== task.id ? targetId : null);
+            setDropTarget(dropTargetAt(moveEvent.clientX, moveEvent.clientY, task.id));
           };
           const handleUp = (upEvent: MouseEvent) => {
-            const targetId = reorderTargetAt(upEvent.clientX, upEvent.clientY)?.dataset.taskId;
-            if (targetId && targetId !== task.id) onReorder(task.id, targetId);
+            const target = dropTargetAt(upEvent.clientX, upEvent.clientY, task.id);
+            if (target) onReorder(task.id, target.id, target.placement);
             draggedRef.current = null;
             setDragged(null);
-            setOver(null);
+            setDropTarget(null);
             window.removeEventListener("mousemove", handleMove);
           };
           window.addEventListener("mousemove", handleMove);
@@ -1581,14 +1587,22 @@ export default function TaskApp() {
     setSelectedEdgeId(null);
   }, [clearArrangement, graphDraft, updateData]);
 
-  const reorderTasks = useCallback((draggedId: string, targetId: string) => {
+  const reorderTasks = useCallback((draggedId: string, targetId: string, placement: DropPlacement) => {
     updateData((current) => {
-      const tasks = [...current.tasks];
-      const from = tasks.findIndex((task) => task.id === draggedId);
-      const to = tasks.findIndex((task) => task.id === targetId);
-      if (from < 0 || to < 0) return current;
-      const [moved] = tasks.splice(from, 1);
-      tasks.splice(to, 0, moved);
+      const activeTasks = current.tasks.filter((task) => !task.completed);
+      const from = activeTasks.findIndex((task) => task.id === draggedId);
+      const target = activeTasks.findIndex((task) => task.id === targetId);
+      if (from < 0 || target < 0) return current;
+
+      const reordered = [...activeTasks];
+      const [moved] = reordered.splice(from, 1);
+      const targetAfterRemoval = reordered.findIndex((task) => task.id === targetId);
+      const insertionIndex = targetAfterRemoval + (placement === "after" ? 1 : 0);
+      reordered.splice(insertionIndex, 0, moved);
+
+      if (reordered.every((task, index) => task.id === activeTasks[index].id)) return current;
+      let activeIndex = 0;
+      const tasks = current.tasks.map((task) => task.completed ? task : reordered[activeIndex++]);
       return { ...current, tasks };
     });
   }, [updateData]);
