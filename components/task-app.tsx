@@ -1924,7 +1924,7 @@ export default function TaskApp() {
                     </div>
                   </ViewportPortal>
                 )}
-                <Background color="#d8d9dc" gap={24} size={1} />
+                <Background color="#c6cdd8" gap={24} size={1} />
                 <Controls showInteractive={false} position="bottom-left" />
             </ReactFlow>
             {!data.tasks.length && !graphDraft && (

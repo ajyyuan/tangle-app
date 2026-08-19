@@ -136,7 +136,7 @@ button { color: inherit; }
 .empty-state span { font-size: 12px; }
 
 .graph-workspace { display: flex; padding: 18px; }
-.graph-panel { flex: 1; position: relative; min-height: 520px; overflow: hidden; background: #fbfbfa; border: 1px solid var(--border); border-radius: 10px; }
+.graph-panel { flex: 1; position: relative; min-height: 520px; overflow: hidden; background: #f1f4f8; border: 1px solid var(--border); border-radius: 10px; }
 .react-flow__pane { cursor: grab; }
 .react-flow__pane:active { cursor: grabbing; }
 .react-flow__node { cursor: grab; }
@@ -149,9 +149,13 @@ button { color: inherit; }
 .layout-guide { position: absolute; background: transparent; }
 .layout-guide.is-alternate { background: rgba(112,120,134,.04); }
 
-.task-node { width: 100%; height: 100%; min-width: 230px; min-height: 52px; border: 1px solid #dadbde; border-radius: 8px; background: rgba(255,255,255,.98); box-shadow: 0 1px 2px rgba(20,24,32,.05); transition: opacity 140ms ease, border-color 140ms ease, box-shadow 140ms ease; }
-.task-node:hover { border-color: #c5c7cb; box-shadow: 0 2px 5px rgba(20,24,32,.07); }
-.task-node.is-blocked:not(.is-completed) { opacity: 0.64; background: rgba(250,250,249,.96); }
+.task-node { width: 100%; height: 100%; min-width: 230px; min-height: 52px; border: 1px solid #b9cce8; border-radius: 8px; background: rgba(244,248,255,.99); box-shadow: 0 1px 4px rgba(42,75,126,.1); transition: opacity 140ms ease, color 140ms ease, background 140ms ease, border-color 140ms ease, box-shadow 140ms ease; }
+.task-node:hover { border-color: #9eb9df; box-shadow: 0 2px 7px rgba(42,75,126,.14); }
+.task-node.is-blocked:not(.is-completed) { background: rgba(248,246,242,.98); border-color: #dad8d2; box-shadow: none; }
+.task-node.is-blocked:not(.is-completed) .node-title { color: #7f8288; }
+.task-node.is-blocked:not(.is-completed) .check-button { border-color: #c8cacf; }
+.react-flow__node.selected .task-node.is-blocked:not(.is-completed) { background: #fbfbfa; border-color: #9ebcf2; box-shadow: 0 0 0 3px rgba(52,120,246,.1); }
+.react-flow__node.selected .task-node.is-blocked:not(.is-completed) .node-title { color: #4c4f55; }
 .task-node.is-completed { opacity: 0.54; }
 .task-node.is-draft { border-color: #a9c3ef; box-shadow: 0 0 0 3px rgba(52,120,246,.09), 0 2px 6px rgba(20,24,32,.06); }
 .task-node-content { height: 100%; display: grid; grid-template-columns: 21px minmax(0, 1fr); align-items: center; gap: 10px; padding: 0 16px 0 12px; }
