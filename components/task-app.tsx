@@ -9,7 +9,6 @@ import {
   Edge,
   EdgeProps,
   EdgeToolbar,
-  getSmoothStepPath,
   Handle,
   MarkerType,
   Node,
@@ -67,7 +66,8 @@ type DraftTaskNodeData = {
 };
 type TaskNodeData = PersistedTaskNodeData | DraftTaskNodeData;
 type TaskFlowNode = Node<TaskNodeData, "task">;
-type DependencyEdgeData = { onRemove: (id: string) => void };
+type Rect = { left: number; top: number; right: number; bottom: number };
+type DependencyEdgeData = { onRemove: (id: string) => void; obstacles: Rect[] };
 type DependencyFlowEdge = Edge<DependencyEdgeData, "dependency">;
 type ConnectionSide = "top" | "right" | "bottom" | "left";
 
@@ -83,6 +83,10 @@ const NODE_MAX_HEIGHT = 320;
 const NODE_TITLE_OFFSET_X = 43;
 const HISTORY_LIMIT = 100;
 const EDGE_RECONNECT_RADIUS = 18;
+const EDGE_ROUTE_CLEARANCE = 12;
+const EDGE_ROUTE_STUB = 20;
+const EDGE_ROUTE_BEND_PENALTY = 16;
+const EDGE_CORNER_RADIUS = 5;
 const NODE_CONNECTION_RADIUS = 28;
 const LAYOUT_START_X = 72;
 const LAYOUT_START_Y = 72;
@@ -559,6 +563,304 @@ function TaskNode({ id, data, width }: NodeProps<TaskFlowNode>) {
 
 const nodeTypes = { task: TaskNode };
 
+type RouteDirection = 0 | 1 | 2;
+type RouteResult = { path: string; label: Point };
+
+function inflateRect(rect: Rect, amount: number): Rect {
+  return {
+    left: rect.left - amount,
+    top: rect.top - amount,
+    right: rect.right + amount,
+    bottom: rect.bottom + amount,
+  };
+}
+
+function clearanceBeforePointEntersRect(point: Point, rect: Rect) {
+  if (pointInsideRect(point, rect)) return 0;
+  const horizontalGap = point.x < rect.left ? rect.left - point.x : point.x > rect.right ? point.x - rect.right : 0;
+  const verticalGap = point.y < rect.top ? rect.top - point.y : point.y > rect.bottom ? point.y - rect.bottom : 0;
+  return Math.max(horizontalGap, verticalGap);
+}
+
+function pointInsideRect(point: Point, rect: Rect) {
+  const epsilon = 0.001;
+  return point.x > rect.left + epsilon
+    && point.x < rect.right - epsilon
+    && point.y > rect.top + epsilon
+    && point.y < rect.bottom - epsilon;
+}
+
+function segmentIsClear(start: Point, end: Point, obstacles: Rect[]) {
+  const epsilon = 0.001;
+  if (Math.abs(start.y - end.y) < epsilon) {
+    const left = Math.min(start.x, end.x);
+    const right = Math.max(start.x, end.x);
+    return obstacles.every((obstacle) => (
+      start.y <= obstacle.top + epsilon
+      || start.y >= obstacle.bottom - epsilon
+      || right <= obstacle.left + epsilon
+      || left >= obstacle.right - epsilon
+    ));
+  }
+  if (Math.abs(start.x - end.x) < epsilon) {
+    const top = Math.min(start.y, end.y);
+    const bottom = Math.max(start.y, end.y);
+    return obstacles.every((obstacle) => (
+      start.x <= obstacle.left + epsilon
+      || start.x >= obstacle.right - epsilon
+      || bottom <= obstacle.top + epsilon
+      || top >= obstacle.bottom - epsilon
+    ));
+  }
+  return false;
+}
+
+function simplifyRoutePoints(points: Point[]) {
+  const sameCoordinate = (left: number, right: number) => Math.abs(left - right) < 0.01;
+  const deduplicated = points.filter((point, index) => (
+    index === 0 || !sameCoordinate(point.x, points[index - 1].x) || !sameCoordinate(point.y, points[index - 1].y)
+  ));
+  return deduplicated.filter((point, index) => {
+    if (index === 0 || index === deduplicated.length - 1) return true;
+    const previous = deduplicated[index - 1];
+    const next = deduplicated[index + 1];
+    return !((sameCoordinate(previous.x, point.x) && sameCoordinate(point.x, next.x))
+      || (sameCoordinate(previous.y, point.y) && sameCoordinate(point.y, next.y)));
+  });
+}
+
+function preferredRoutePoints(source: Point, sourceStub: Point, targetStub: Point, target: Point, sourcePosition: Position) {
+  if (sourcePosition === Position.Left || sourcePosition === Position.Right) {
+    const middleX = (sourceStub.x + targetStub.x) / 2;
+    return simplifyRoutePoints([
+      source,
+      sourceStub,
+      { x: middleX, y: sourceStub.y },
+      { x: middleX, y: targetStub.y },
+      targetStub,
+      target,
+    ]);
+  }
+  const middleY = (sourceStub.y + targetStub.y) / 2;
+  return simplifyRoutePoints([
+    source,
+    sourceStub,
+    { x: sourceStub.x, y: middleY },
+    { x: targetStub.x, y: middleY },
+    targetStub,
+    target,
+  ]);
+}
+
+function routeIsClear(points: Point[], obstacles: Rect[]) {
+  return points.every((point) => obstacles.every((obstacle) => !pointInsideRect(point, obstacle)))
+    && points.slice(1).every((point, index) => segmentIsClear(points[index], point, obstacles));
+}
+
+function findObstacleRoute(
+  start: Point,
+  end: Point,
+  obstacles: Rect[],
+  sourcePosition: Position,
+  targetPosition: Position,
+): Point[] | null {
+  const xs = [...new Set([start.x, end.x, ...obstacles.flatMap((obstacle) => [obstacle.left, obstacle.right])])].sort((a, b) => a - b);
+  const ys = [...new Set([start.y, end.y, ...obstacles.flatMap((obstacle) => [obstacle.top, obstacle.bottom])])].sort((a, b) => a - b);
+  const rowSize = ys.length;
+  const pointIndex = (xIndex: number, yIndex: number) => xIndex * rowSize + yIndex;
+  const pointAt = (index: number): Point => ({ x: xs[Math.floor(index / rowSize)], y: ys[index % rowSize] });
+  const validPoints = new Map<number, boolean>();
+  const isValidPoint = (index: number) => {
+    const cached = validPoints.get(index);
+    if (cached !== undefined) return cached;
+    const valid = obstacles.every((obstacle) => !pointInsideRect(pointAt(index), obstacle));
+    validPoints.set(index, valid);
+    return valid;
+  };
+  const startIndex = pointIndex(xs.indexOf(start.x), ys.indexOf(start.y));
+  const endIndex = pointIndex(xs.indexOf(end.x), ys.indexOf(end.y));
+  if (!isValidPoint(startIndex) || !isValidPoint(endIndex)) return null;
+
+  type SearchState = {
+    point: number;
+    direction: RouteDirection;
+    cost: number;
+    score: number;
+    order: number;
+    key: string;
+  };
+  const heap: SearchState[] = [];
+  const compare = (left: SearchState, right: SearchState) => (
+    left.score - right.score || left.cost - right.cost || left.order - right.order
+  );
+  const push = (state: SearchState) => {
+    heap.push(state);
+    let index = heap.length - 1;
+    while (index > 0) {
+      const parent = Math.floor((index - 1) / 2);
+      if (compare(heap[parent], heap[index]) <= 0) break;
+      [heap[parent], heap[index]] = [heap[index], heap[parent]];
+      index = parent;
+    }
+  };
+  const pop = () => {
+    const first = heap[0];
+    const last = heap.pop();
+    if (heap.length && last) {
+      heap[0] = last;
+      let index = 0;
+      while (true) {
+        const left = index * 2 + 1;
+        const right = left + 1;
+        let next = index;
+        if (left < heap.length && compare(heap[left], heap[next]) < 0) next = left;
+        if (right < heap.length && compare(heap[right], heap[next]) < 0) next = right;
+        if (next === index) break;
+        [heap[index], heap[next]] = [heap[next], heap[index]];
+        index = next;
+      }
+    }
+    return first;
+  };
+  const axisForPosition = (position: Position): RouteDirection => (
+    position === Position.Left || position === Position.Right ? 1 : 2
+  );
+  const sourceAxis = axisForPosition(sourcePosition);
+  const targetAxis = axisForPosition(targetPosition);
+  const stateKey = (point: number, direction: RouteDirection) => `${point}:${direction}`;
+  const heuristic = (point: Point) => Math.abs(point.x - end.x) + Math.abs(point.y - end.y);
+  const costs = new Map<string, number>();
+  const previous = new Map<string, string>();
+  let order = 0;
+  const initialKey = stateKey(startIndex, sourceAxis);
+  costs.set(initialKey, 0);
+  push({ point: startIndex, direction: sourceAxis, cost: 0, score: heuristic(start), order: order++, key: initialKey });
+
+  while (heap.length) {
+    const current = pop();
+    if (!current || current.cost !== costs.get(current.key)) continue;
+    if (current.point === endIndex) {
+      const route: Point[] = [];
+      let key: string | undefined = current.key;
+      while (key) {
+        route.push(pointAt(Number.parseInt(key.split(":")[0], 10)));
+        key = previous.get(key);
+      }
+      return simplifyRoutePoints(route.reverse());
+    }
+
+    const xIndex = Math.floor(current.point / rowSize);
+    const yIndex = current.point % rowSize;
+    const neighborCandidates: { x: number; y: number; direction: RouteDirection }[] = [
+      { x: xIndex + 1, y: yIndex, direction: 1 },
+      { x: xIndex - 1, y: yIndex, direction: 1 },
+      { x: xIndex, y: yIndex + 1, direction: 2 },
+      { x: xIndex, y: yIndex - 1, direction: 2 },
+    ];
+
+    neighborCandidates.forEach((candidate) => {
+      if (candidate.x < 0 || candidate.x >= xs.length || candidate.y < 0 || candidate.y >= ys.length) return;
+      const neighborIndex = pointIndex(candidate.x, candidate.y);
+      if (!isValidPoint(neighborIndex)) return;
+      const currentPoint = pointAt(current.point);
+      const neighborPoint = pointAt(neighborIndex);
+      if (!segmentIsClear(currentPoint, neighborPoint, obstacles)) return;
+      const distance = Math.abs(currentPoint.x - neighborPoint.x) + Math.abs(currentPoint.y - neighborPoint.y);
+      const turnCost = current.direction === candidate.direction ? 0 : EDGE_ROUTE_BEND_PENALTY;
+      const arrivalCost = neighborIndex === endIndex && candidate.direction !== targetAxis ? EDGE_ROUTE_BEND_PENALTY : 0;
+      const nextCost = current.cost + distance + turnCost + arrivalCost;
+      const key = stateKey(neighborIndex, candidate.direction);
+      if (nextCost >= (costs.get(key) ?? Infinity)) return;
+      costs.set(key, nextCost);
+      previous.set(key, current.key);
+      push({
+        point: neighborIndex,
+        direction: candidate.direction,
+        cost: nextCost,
+        score: nextCost + heuristic(neighborPoint),
+        order: order++,
+        key,
+      });
+    });
+  }
+  return null;
+}
+
+function roundedRoutePath(points: Point[], radius: number) {
+  const route = simplifyRoutePoints(points);
+  if (!route.length) return "";
+  const number = (value: number) => Number(value.toFixed(3));
+  let path = `M${number(route[0].x)} ${number(route[0].y)}`;
+  for (let index = 1; index < route.length - 1; index += 1) {
+    const previous = route[index - 1];
+    const current = route[index];
+    const next = route[index + 1];
+    const incomingLength = Math.abs(current.x - previous.x) + Math.abs(current.y - previous.y);
+    const outgoingLength = Math.abs(next.x - current.x) + Math.abs(next.y - current.y);
+    const cornerRadius = Math.min(radius, incomingLength / 2, outgoingLength / 2);
+    const cornerOffset = (delta: number) => Math.abs(delta) < 0.01 ? 0 : Math.sign(delta) * cornerRadius;
+    const before = {
+      x: current.x + cornerOffset(previous.x - current.x),
+      y: current.y + cornerOffset(previous.y - current.y),
+    };
+    const after = {
+      x: current.x + cornerOffset(next.x - current.x),
+      y: current.y + cornerOffset(next.y - current.y),
+    };
+    path += `L${number(before.x)} ${number(before.y)}Q${number(current.x)} ${number(current.y)} ${number(after.x)} ${number(after.y)}`;
+  }
+  const last = route.at(-1)!;
+  return `${path}L${number(last.x)} ${number(last.y)}`;
+}
+
+function routeMidpoint(points: Point[]) {
+  const route = simplifyRoutePoints(points);
+  const lengths = route.slice(1).map((point, index) => (
+    Math.abs(point.x - route[index].x) + Math.abs(point.y - route[index].y)
+  ));
+  const halfway = lengths.reduce((total, length) => total + length, 0) / 2;
+  let traveled = 0;
+  for (let index = 0; index < lengths.length; index += 1) {
+    const length = lengths[index];
+    if (traveled + length >= halfway) {
+      const start = route[index];
+      const end = route[index + 1];
+      const progress = length ? (halfway - traveled) / length : 0;
+      return { x: start.x + (end.x - start.x) * progress, y: start.y + (end.y - start.y) * progress };
+    }
+    traveled += length;
+  }
+  return route.at(-1) ?? { x: 0, y: 0 };
+}
+
+function dependencyRoute(
+  source: Point,
+  target: Point,
+  sourcePosition: Position,
+  targetPosition: Position,
+  obstacleRects: Rect[],
+): RouteResult {
+  const sourceStub = offsetPoint(source.x, source.y, sourcePosition, EDGE_ROUTE_STUB);
+  const targetStub = offsetPoint(target.x, target.y, targetPosition, EDGE_ROUTE_STUB);
+  const obstacles = obstacleRects.map((obstacle) => {
+    const availableClearance = Math.min(
+      clearanceBeforePointEntersRect(source, obstacle),
+      clearanceBeforePointEntersRect(target, obstacle),
+    );
+    return inflateRect(obstacle, Math.min(EDGE_ROUTE_CLEARANCE, availableClearance));
+  });
+  const preferred = preferredRoutePoints(source, sourceStub, targetStub, target, sourcePosition);
+  const routeStart = routeIsClear([source, sourceStub], obstacles) ? sourceStub : source;
+  const routeEnd = routeIsClear([targetStub, target], obstacles) ? targetStub : target;
+  const detour = routeIsClear(preferred, obstacles)
+    ? null
+    : findObstacleRoute(routeStart, routeEnd, obstacles, sourcePosition, targetPosition);
+  const points = detour && routeIsClear([source, ...detour, target], obstacles)
+    ? simplifyRoutePoints([source, ...detour, target])
+    : preferred;
+  return { path: roundedRoutePath(points, EDGE_CORNER_RADIUS), label: routeMidpoint(points) };
+}
+
 function DependencyEdge({
   id,
   sourceX,
@@ -573,14 +875,13 @@ function DependencyEdge({
   data,
   interactionWidth,
 }: EdgeProps<DependencyFlowEdge>) {
-  const [path, labelX, labelY] = getSmoothStepPath({
-    sourceX,
-    sourceY,
-    targetX,
-    targetY,
+  const route = dependencyRoute(
+    { x: sourceX, y: sourceY },
+    { x: targetX, y: targetY },
     sourcePosition,
     targetPosition,
-  });
+    data?.obstacles ?? [],
+  );
   const sourceHandle = offsetPoint(sourceX, sourceY, sourcePosition, EDGE_RECONNECT_RADIUS);
   const targetHandle = offsetPoint(targetX, targetY, targetPosition, EDGE_RECONNECT_RADIUS);
 
@@ -588,7 +889,7 @@ function DependencyEdge({
     <>
       <BaseEdge
         id={id}
-        path={path}
+        path={route.path}
         markerEnd={markerEnd}
         style={style}
         interactionWidth={interactionWidth}
@@ -601,8 +902,8 @@ function DependencyEdge({
       )}
       <EdgeToolbar
         edgeId={id}
-        x={labelX}
-        y={labelY}
+        x={route.label.x}
+        y={route.label.y}
         isVisible={selected}
         className="connection-toolbar nodrag nopan"
         style={{ zIndex: 2000 }}
@@ -638,6 +939,16 @@ function nodeDimensions(node: TaskFlowNode): Size {
   return {
     width: node.measured?.width ?? node.width ?? (Number.isFinite(styleWidth) ? styleWidth : NODE_MIN_WIDTH),
     height: node.measured?.height ?? node.height ?? (Number.isFinite(styleHeight) ? styleHeight : NODE_MIN_HEIGHT),
+  };
+}
+
+function nodeRect(node: TaskFlowNode): Rect {
+  const size = nodeDimensions(node);
+  return {
+    left: node.position.x,
+    top: node.position.y,
+    right: node.position.x + size.width,
+    bottom: node.position.y + size.height,
   };
 }
 
@@ -1680,7 +1991,12 @@ export default function TaskApp() {
         selected,
         type: "dependency",
         reconnectable: selected,
-        data: { onRemove: removeDependency },
+        data: {
+          onRemove: removeDependency,
+          obstacles: flowNodes
+            .filter((node) => node.id !== edge.source && node.id !== edge.target)
+            .map(nodeRect),
+        },
         markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: selected ? "var(--blue)" : "var(--edge)" },
         style: { stroke: "var(--edge)", strokeWidth: 1.35 },
         interactionWidth: 26,
