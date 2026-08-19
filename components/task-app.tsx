@@ -23,7 +23,7 @@ import {
   ViewportPortal,
 } from "@xyflow/react";
 import { FormEvent, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ArrangeIcon, CheckIcon, CloseIcon, GripIcon, InfoIcon, PlusIcon, RedoIcon, SettingsIcon, SidebarIcon, TrashIcon, UndoIcon } from "./icons";
+import { AppearanceIcon, ArrangeIcon, CheckIcon, CloseIcon, GripIcon, InfoIcon, PlusIcon, RedoIcon, SettingsIcon, SidebarIcon, TrashIcon, UndoIcon } from "./icons";
 
 type Point = { x: number; y: number };
 type Size = { width: number; height: number };
@@ -32,6 +32,7 @@ type Task = { id: string; title: string; completed: boolean; position: Point; si
 type Dependency = { id: string; source: string; target: string };
 type TaskData = { tasks: Task[]; dependencies: Dependency[] };
 type View = "list" | "graph";
+type Appearance = "system" | "light" | "dark";
 type LayoutDirection = "vertical" | "horizontal";
 type LayoutGuide = { id: string; x: number; y: number; width: number; height: number };
 type ArrangementSnapshot = {
@@ -70,6 +71,7 @@ type ConnectionSide = "top" | "right" | "bottom" | "left";
 
 const STORAGE_KEY = "tangle-task-data-v1";
 const LAYOUT_DIRECTION_KEY = "tangle-layout-direction-v1";
+const APPEARANCE_KEY = "tangle-appearance-v1";
 const NODE_MIN_WIDTH = 230;
 const NODE_MAX_AUTO_WIDTH = 360;
 const NODE_MAX_WIDTH = 560;
@@ -1084,6 +1086,8 @@ export default function TaskApp() {
   const [layoutGuides, setLayoutGuides] = useState<LayoutGuide[]>([]);
   const [layoutDirection, setLayoutDirection] = useState<LayoutDirection>("vertical");
   const [arrangementOptionsOpen, setArrangementOptionsOpen] = useState(false);
+  const [appearance, setAppearance] = useState<Appearance>("system");
+  const [appearanceOptionsOpen, setAppearanceOptionsOpen] = useState(false);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const positionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const arrangeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1093,6 +1097,7 @@ export default function TaskApp() {
   const activeArrangement = useRef<ArrangementSnapshot | null>(null);
   const pendingPreviousArrangement = useRef<ArrangementSnapshot | null | undefined>(undefined);
   const arrangementOptionsRef = useRef<HTMLDivElement>(null);
+  const appearanceOptionsRef = useRef<HTMLDivElement>(null);
   const lastPaneClick = useRef<{ time: number; point: Point } | null>(null);
   const pendingNodePositions = useRef<Map<string, Point>>(new Map());
   const pendingNodeSizes = useRef<Map<string, Size>>(new Map());
@@ -1175,6 +1180,10 @@ export default function TaskApp() {
       }
       const savedDirection = window.localStorage.getItem(LAYOUT_DIRECTION_KEY);
       if (savedDirection === "vertical" || savedDirection === "horizontal") setLayoutDirection(savedDirection);
+      const savedAppearance = window.localStorage.getItem(APPEARANCE_KEY);
+      if (savedAppearance === "light" || savedAppearance === "dark" || savedAppearance === "system") {
+        setAppearance(savedAppearance);
+      }
     } catch {
       // Keep the sample data if saved data is unavailable or malformed.
     }
@@ -1188,6 +1197,22 @@ export default function TaskApp() {
   useEffect(() => {
     if (hydrated) window.localStorage.setItem(LAYOUT_DIRECTION_KEY, layoutDirection);
   }, [hydrated, layoutDirection]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const applyAppearance = () => {
+      const resolved = appearance === "system" ? (media.matches ? "dark" : "light") : appearance;
+      document.documentElement.dataset.theme = appearance;
+      document.documentElement.dataset.resolvedTheme = resolved;
+      document.documentElement.style.colorScheme = resolved;
+      window.localStorage.setItem(APPEARANCE_KEY, appearance);
+    };
+    applyAppearance();
+    if (appearance !== "system") return;
+    media.addEventListener("change", applyAppearance);
+    return () => media.removeEventListener("change", applyAppearance);
+  }, [appearance, hydrated]);
 
   useEffect(() => {
     if (!arrangementOptionsOpen) return;
@@ -1205,6 +1230,23 @@ export default function TaskApp() {
       window.removeEventListener("keydown", closeOnEscape);
     };
   }, [arrangementOptionsOpen]);
+
+  useEffect(() => {
+    if (!appearanceOptionsOpen) return;
+    const closeOptions = (event: PointerEvent) => {
+      if (event.target instanceof Element && appearanceOptionsRef.current?.contains(event.target)) return;
+      setAppearanceOptionsOpen(false);
+    };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setAppearanceOptionsOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOptions);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOptions);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [appearanceOptionsOpen]);
 
   useEffect(() => {
     if ((!isDesktopWorkspace && view !== "graph") || !flowInstance.current) return;
@@ -1457,8 +1499,8 @@ export default function TaskApp() {
         type: "dependency",
         reconnectable: selected,
         data: { onRemove: removeDependency },
-        markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: selected ? "#3478f6" : "#a4a9b3" },
-        style: { stroke: "#a4a9b3", strokeWidth: 1.35 },
+        markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: selected ? "var(--blue)" : "var(--edge)" },
+        style: { stroke: "var(--edge)", strokeWidth: 1.35 },
         interactionWidth: 26,
       };
     });
@@ -1815,6 +1857,36 @@ export default function TaskApp() {
           </div>
         )}
         <div className="header-actions">
+          <div className="appearance-control" ref={appearanceOptionsRef}>
+            <button
+              type="button"
+              className="appearance-button"
+              onClick={() => setAppearanceOptionsOpen((open) => !open)}
+              aria-label="Appearance"
+              aria-expanded={appearanceOptionsOpen}
+              aria-haspopup="dialog"
+              title="Appearance"
+            ><AppearanceIcon /></button>
+            {appearanceOptionsOpen && (
+              <div className="appearance-popover" role="dialog" aria-label="Appearance">
+                <span>Appearance</span>
+                <div className="appearance-options">
+                  {(["system", "light", "dark"] as Appearance[]).map((option) => (
+                    <button
+                      type="button"
+                      key={option}
+                      className={appearance === option ? "is-active" : ""}
+                      aria-pressed={appearance === option}
+                      onClick={() => {
+                        setAppearance(option);
+                        setAppearanceOptionsOpen(false);
+                      }}
+                    >{option[0].toUpperCase() + option.slice(1)}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
           <div className="history-controls" aria-label="History controls">
             <button
               type="button"
@@ -1924,7 +1996,7 @@ export default function TaskApp() {
                     </div>
                   </ViewportPortal>
                 )}
-                <Background color="#c6cdd8" gap={24} size={1} />
+                <Background color="var(--grid)" gap={24} size={1} />
                 <Controls showInteractive={false} position="bottom-left" />
             </ReactFlow>
             {!data.tasks.length && !graphDraft && (

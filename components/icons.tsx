@@ -90,6 +90,16 @@ export function SettingsIcon(props: IconProps) {
   );
 }
 
+export function AppearanceIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 18 18" fill="none" aria-hidden="true" {...props}>
+      <circle cx="9" cy="9" r="6.15" stroke="currentColor" strokeWidth="1.35" />
+      <path d="M9 2.85a6.15 6.15 0 0 0 0 12.3V2.85Z" fill="currentColor" opacity=".28" />
+      <path d="M9 2.85v12.3" stroke="currentColor" strokeWidth="1.15" />
+    </svg>
+  );
+}
+
 export function SidebarIcon(props: IconProps) {
   return (
     <svg viewBox="0 0 18 18" fill="none" aria-hidden="true" {...props}>
