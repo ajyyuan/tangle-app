@@ -22,7 +22,7 @@ import {
   useNodesState,
   ViewportPortal,
 } from "@xyflow/react";
-import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppearanceIcon, ArrangeIcon, CheckIcon, ChevronIcon, CloseIcon, GripIcon, InfoIcon, PlusIcon, RedoIcon, SettingsIcon, SidebarIcon, TrashIcon, UndoIcon } from "./icons";
 
 type Point = { x: number; y: number };
@@ -391,6 +391,7 @@ function InlineTitle({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title);
   const inputRef = useRef<HTMLInputElement>(null);
+  const titleButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => setDraft(title), [title]);
   useEffect(() => {
@@ -400,11 +401,14 @@ function InlineTitle({
     }
   }, [editing]);
 
-  const commit = () => {
+  const restoreTitleFocus = () => window.requestAnimationFrame(() => titleButtonRef.current?.focus());
+
+  const commit = (restoreFocus = false) => {
     const clean = draft.trim();
     setEditing(false);
     if (clean && clean !== title) onSave(clean);
     else setDraft(title);
+    if (restoreFocus) restoreTitleFocus();
   };
 
   if (!editable) {
@@ -422,12 +426,13 @@ function InlineTitle({
         className={`inline-title-input nodrag nopan ${className}`}
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
-        onBlur={commit}
+        onBlur={() => commit()}
         onKeyDown={(event) => {
-          if (event.key === "Enter") commit();
+          if (event.key === "Enter") commit(true);
           if (event.key === "Escape") {
             setDraft(title);
             setEditing(false);
+            restoreTitleFocus();
           }
         }}
         aria-label="Task title"
@@ -437,6 +442,7 @@ function InlineTitle({
 
   return (
     <button
+      ref={titleButtonRef}
       type="button"
       className={`inline-title nodrag nopan ${completed ? "is-completed" : ""} ${className}`}
       onClick={(event) => {
@@ -714,6 +720,7 @@ function ListView({
   onRename,
   onInspect,
   onSelect,
+  onClearSelection,
   onReorder,
   inspectedTaskId,
   selectedTaskId,
@@ -728,6 +735,7 @@ function ListView({
   onRename: (id: string, title: string) => void;
   onInspect: (id: string) => void;
   onSelect: (id: string) => void;
+  onClearSelection: () => void;
   onReorder: (draggedId: string, targetId: string) => void;
   inspectedTaskId: string | null;
   selectedTaskId: string | null;
@@ -736,11 +744,67 @@ function ListView({
   const [dragged, setDragged] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
   const draggedRef = useRef<string | null>(null);
+  const keyboardScopeRef = useRef<HTMLDivElement>(null);
   const activeTasks = tasks.filter((task) => !task.completed || settlingCompletedIds.has(task.id));
   const completedTasks = tasks.filter((task) => task.completed && !settlingCompletedIds.has(task.id));
   const reorderTargetAt = (x: number, y: number) => document
     .elementFromPoint(x, y)
     ?.closest<HTMLElement>(".task-row[data-reorderable='true']");
+  const visibleTaskRows = () => Array.from(keyboardScopeRef.current?.querySelectorAll<HTMLElement>(".task-row") ?? []);
+
+  const handleListKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    if (target.closest("input, textarea, [contenteditable='true']")) return;
+
+    const rows = visibleTaskRows();
+    const focusedRow = target.closest<HTMLElement>(".task-row");
+    const selectedRow = selectedTaskId
+      ? rows.find((row) => row.dataset.taskId === selectedTaskId) ?? null
+      : null;
+    const currentRow = focusedRow ?? selectedRow;
+
+    if (event.key === "Escape") {
+      if (!selectedTaskId) return;
+      event.preventDefault();
+      onClearSelection();
+      target.blur();
+      return;
+    }
+
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      if (!rows.length) return;
+      event.preventDefault();
+      const currentIndex = currentRow ? rows.indexOf(currentRow) : -1;
+      const nextIndex = currentIndex < 0
+        ? (event.key === "ArrowDown" ? 0 : rows.length - 1)
+        : Math.max(0, Math.min(rows.length - 1, currentIndex + (event.key === "ArrowDown" ? 1 : -1)));
+      const nextRow = rows[nextIndex];
+      const nextId = nextRow.dataset.taskId;
+      if (!nextId) return;
+      onSelect(nextId);
+      nextRow.focus({ preventScroll: true });
+      nextRow.scrollIntoView({ block: "nearest" });
+      return;
+    }
+
+    if (!currentRow || !selectedTaskId || currentRow.dataset.taskId !== selectedTaskId) return;
+
+    if (event.key === "Enter") {
+      if (target.closest("button")) return;
+      event.preventDefault();
+      currentRow.querySelector<HTMLButtonElement>(".inline-title")?.click();
+      return;
+    }
+
+    if (event.key !== " " && event.key !== "Spacebar") return;
+    if (target.closest("button:not(.inline-title)")) return;
+    if (event.repeat) return;
+    event.preventDefault();
+
+    const id = currentRow.dataset.taskId;
+    if (!id) return;
+    onInspect(id);
+  };
 
   const renderTaskRow = (task: Task, reorderable: boolean) => (
     <div
@@ -748,8 +812,12 @@ function ListView({
       role="listitem"
       data-task-id={task.id}
       data-reorderable={reorderable}
+      tabIndex={selectedTaskId === task.id ? 0 : -1}
       className={`task-row ${task.completed ? "is-completed" : ""} ${settlingCompletedIds.has(task.id) ? "is-settling" : ""} ${blockedIds.has(task.id) ? "is-blocked" : ""} ${inspectedTaskId === task.id ? "is-inspected" : ""} ${selectedTaskId === task.id ? "is-selected" : ""} ${dragged === task.id ? "is-dragging" : ""} ${over === task.id ? "is-drop-target" : ""}`}
       onPointerDownCapture={() => onSelect(task.id)}
+      onFocusCapture={() => {
+        if (selectedTaskId !== task.id) onSelect(task.id);
+      }}
       onDoubleClick={(event) => {
         const target = event.target as HTMLElement;
         if (target.closest(".inline-title, .inline-title-input, .row-info, .check-button, .drag-grip")) return;
@@ -832,7 +900,23 @@ function ListView({
   }
 
   return (
-    <>
+    <div
+      ref={keyboardScopeRef}
+      className="task-list-keyboard-scope"
+      role="group"
+      aria-label="Task list"
+      tabIndex={0}
+      onKeyDown={handleListKeyDown}
+      onFocus={(event) => {
+        if (event.target !== event.currentTarget) return;
+        const rows = visibleTaskRows();
+        const row = rows.find((candidate) => candidate.dataset.taskId === selectedTaskId) ?? rows[0];
+        const id = row?.dataset.taskId;
+        if (!row || !id) return;
+        onSelect(id);
+        window.requestAnimationFrame(() => row.focus({ preventScroll: true }));
+      }}
+    >
       <div className="task-list" role="list" aria-label="Incomplete tasks">
         {activeTasks.map((task) => renderTaskRow(task, !task.completed))}
       </div>
@@ -858,7 +942,7 @@ function ListView({
           )}
         </section>
       )}
-    </>
+    </div>
   );
 }
 
@@ -909,18 +993,13 @@ function TaskInspector({
 
   useEffect(() => {
     const handleEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      if (addingRelationship) {
-        setAddingRelationship(null);
-        setRelationshipSearch("");
-        return;
-      }
-      commit();
-      onClose();
+      if (event.key !== "Escape" || !addingRelationship) return;
+      setAddingRelationship(null);
+      setRelationshipSearch("");
     };
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
-  }, [addingRelationship, commit, onClose]);
+  }, [addingRelationship]);
 
   const close = () => {
     commit();
@@ -1880,6 +1959,11 @@ export default function TaskApp() {
     revealTaskOnGraph(id);
   }, [revealTaskOnGraph]);
 
+  const clearTaskSelection = useCallback(() => {
+    setSelectedTaskId(null);
+    setSelectedEdgeId(null);
+  }, []);
+
   const openTaskFromInspector = useCallback((id: string) => {
     setSelectedTaskId(id);
     setSelectedEdgeId(null);
@@ -1904,6 +1988,7 @@ export default function TaskApp() {
         onRename={renameTask}
         onInspect={setInspectedTaskId}
         onSelect={selectTaskFromList}
+        onClearSelection={clearTaskSelection}
         onReorder={reorderTasks}
         inspectedTaskId={inspectedTaskId}
         selectedTaskId={selectedTaskId}

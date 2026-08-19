@@ -179,6 +179,7 @@ button { color: inherit; }
 .list-heading h1 { margin: 0; font-size: 26px; font-weight: 680; letter-spacing: -0.035em; }
 .list-heading p { margin: 0; color: var(--muted); font-size: 12px; }
 
+.task-list-keyboard-scope { outline: 0; }
 .task-list { border-top: 1px solid var(--border); }
 .task-row {
   height: 55px;
@@ -190,6 +191,8 @@ button { color: inherit; }
   position: relative;
   transition: opacity 150ms ease, background 150ms ease;
 }
+.task-row:focus { outline: 0; }
+.task-row:focus-visible { z-index: 2; outline: 1px solid var(--blue-ring); outline-offset: -1px; }
 .task-row::before { content: ""; position: absolute; left: 0; right: 0; top: -1px; height: 2px; background: transparent; }
 .task-row.is-drop-target::before { background: var(--blue); }
 .task-row.is-blocked:not(.is-completed) .inline-title { color: var(--muted); }
