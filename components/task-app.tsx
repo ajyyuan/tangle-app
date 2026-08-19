@@ -67,7 +67,12 @@ type DraftTaskNodeData = {
 type TaskNodeData = PersistedTaskNodeData | DraftTaskNodeData;
 type TaskFlowNode = Node<TaskNodeData, "task">;
 type Rect = { left: number; top: number; right: number; bottom: number };
-type DependencyEdgeData = { onRemove: (id: string) => void; obstacles: Rect[] };
+type DependencyEdgeData = {
+  onRemove: (id: string) => void;
+  obstacles: Rect[];
+  sourceDockOffset: number;
+  targetDockOffset: number;
+};
 type DependencyFlowEdge = Edge<DependencyEdgeData, "dependency">;
 type ConnectionSide = "top" | "right" | "bottom" | "left";
 
@@ -87,6 +92,8 @@ const EDGE_ROUTE_CLEARANCE = 12;
 const EDGE_ROUTE_STUB = 20;
 const EDGE_ROUTE_BEND_PENALTY = 16;
 const EDGE_CORNER_RADIUS = 5;
+const EDGE_DOCK_SPACING = 14;
+const EDGE_DOCK_INSET = 12;
 const NODE_CONNECTION_RADIUS = 28;
 const LAYOUT_START_X = 72;
 const LAYOUT_START_Y = 72;
@@ -875,15 +882,17 @@ function DependencyEdge({
   data,
   interactionWidth,
 }: EdgeProps<DependencyFlowEdge>) {
+  const source = offsetAlongDock({ x: sourceX, y: sourceY }, sourcePosition, data?.sourceDockOffset ?? 0);
+  const target = offsetAlongDock({ x: targetX, y: targetY }, targetPosition, data?.targetDockOffset ?? 0);
   const route = dependencyRoute(
-    { x: sourceX, y: sourceY },
-    { x: targetX, y: targetY },
+    source,
+    target,
     sourcePosition,
     targetPosition,
     data?.obstacles ?? [],
   );
-  const sourceHandle = offsetPoint(sourceX, sourceY, sourcePosition, EDGE_RECONNECT_RADIUS);
-  const targetHandle = offsetPoint(targetX, targetY, targetPosition, EDGE_RECONNECT_RADIUS);
+  const sourceHandle = offsetPoint(source.x, source.y, sourcePosition, EDGE_RECONNECT_RADIUS);
+  const targetHandle = offsetPoint(target.x, target.y, targetPosition, EDGE_RECONNECT_RADIUS);
 
   return (
     <>
@@ -933,6 +942,11 @@ function offsetPoint(x: number, y: number, position: Position, distance: number)
   return { x, y: y + distance };
 }
 
+function offsetAlongDock(point: Point, position: Position, distance: number): Point {
+  if (position === Position.Top || position === Position.Bottom) return { x: point.x + distance, y: point.y };
+  return { x: point.x, y: point.y + distance };
+}
+
 function nodeDimensions(node: TaskFlowNode): Size {
   const styleWidth = typeof node.style?.width === "number" ? node.style.width : Number.parseFloat(String(node.style?.width ?? ""));
   const styleHeight = typeof node.style?.height === "number" ? node.style.height : Number.parseFloat(String(node.style?.height ?? ""));
@@ -971,12 +985,29 @@ function facingHandles(source: TaskFlowNode, target: TaskFlowNode) {
   if (horizontalScore > verticalScore) {
     const sourceSide: ConnectionSide = dx >= 0 ? "right" : "left";
     const targetSide: ConnectionSide = dx >= 0 ? "left" : "right";
-    return { sourceHandle: `source-${sourceSide}`, targetHandle: `target-${targetSide}` };
+    return { sourceHandle: `source-${sourceSide}`, targetHandle: `target-${targetSide}`, sourceSide, targetSide };
   }
 
   const sourceSide: ConnectionSide = dy >= 0 ? "bottom" : "top";
   const targetSide: ConnectionSide = dy >= 0 ? "top" : "bottom";
-  return { sourceHandle: `source-${sourceSide}`, targetHandle: `target-${targetSide}` };
+  return { sourceHandle: `source-${sourceSide}`, targetHandle: `target-${targetSide}`, sourceSide, targetSide };
+}
+
+function nodeCenter(node: TaskFlowNode): Point {
+  const size = nodeDimensions(node);
+  return { x: node.position.x + size.width / 2, y: node.position.y + size.height / 2 };
+}
+
+function dockOffsetLimit(node: TaskFlowNode, side: ConnectionSide) {
+  const size = nodeDimensions(node);
+  const sideLength = side === "top" || side === "bottom" ? size.width : size.height;
+  return Math.max(0, Math.min(EDGE_RECONNECT_RADIUS - 3, sideLength / 2 - EDGE_DOCK_INSET));
+}
+
+function centeredDockOffset(index: number, count: number, limit: number) {
+  if (count < 2 || limit <= 0) return 0;
+  const spacing = Math.min(EDGE_DOCK_SPACING, (limit * 2) / (count - 1));
+  return (index - (count - 1) / 2) * spacing;
 }
 
 function hasPath(from: string, to: string, dependencies: Dependency[], ignoredEdgeId?: string) {
@@ -1980,14 +2011,66 @@ export default function TaskApp() {
 
   const flowEdges = useMemo<DependencyFlowEdge[]>(() => {
     const nodesById = new Map(flowNodes.map((node) => [node.id, node]));
-    return data.dependencies.map((edge) => {
-      const selected = edge.id === selectedEdgeId;
+    const layouts = data.dependencies.map((edge) => {
       const sourceNode = nodesById.get(edge.source);
       const targetNode = nodesById.get(edge.target);
-      const handles = sourceNode && targetNode ? facingHandles(sourceNode, targetNode) : {};
+      return { edge, sourceNode, targetNode, handles: sourceNode && targetNode ? facingHandles(sourceNode, targetNode) : null };
+    });
+    type DockUse = {
+      layout: (typeof layouts)[number];
+      endpoint: "source" | "target";
+      owner: TaskFlowNode;
+      other: TaskFlowNode;
+      side: ConnectionSide;
+    };
+    const dockGroups = new Map<string, DockUse[]>();
+    const addDockUse = (use: DockUse) => {
+      const key = `${use.owner.id}:${use.side}`;
+      dockGroups.set(key, [...(dockGroups.get(key) ?? []), use]);
+    };
+    layouts.forEach((layout) => {
+      if (!layout.sourceNode || !layout.targetNode || !layout.handles) return;
+      addDockUse({
+        layout,
+        endpoint: "source",
+        owner: layout.sourceNode,
+        other: layout.targetNode,
+        side: layout.handles.sourceSide,
+      });
+      addDockUse({
+        layout,
+        endpoint: "target",
+        owner: layout.targetNode,
+        other: layout.sourceNode,
+        side: layout.handles.targetSide,
+      });
+    });
+    const sourceOffsets = new Map<string, number>();
+    const targetOffsets = new Map<string, number>();
+    dockGroups.forEach((group) => {
+      const { owner, side } = group[0];
+      const sorted = [...group].sort((left, right) => {
+        const leftCenter = nodeCenter(left.other);
+        const rightCenter = nodeCenter(right.other);
+        const difference = side === "top" || side === "bottom"
+          ? leftCenter.x - rightCenter.x
+          : leftCenter.y - rightCenter.y;
+        return difference
+          || left.layout.edge.id.localeCompare(right.layout.edge.id)
+          || left.endpoint.localeCompare(right.endpoint);
+      });
+      const limit = dockOffsetLimit(owner, side);
+      sorted.forEach((use, index) => {
+        const offsets = use.endpoint === "source" ? sourceOffsets : targetOffsets;
+        offsets.set(use.layout.edge.id, centeredDockOffset(index, sorted.length, limit));
+      });
+    });
+
+    return layouts.map(({ edge, handles }) => {
+      const selected = edge.id === selectedEdgeId;
       return {
         ...edge,
-        ...handles,
+        ...(handles ? { sourceHandle: handles.sourceHandle, targetHandle: handles.targetHandle } : {}),
         selected,
         type: "dependency",
         reconnectable: selected,
@@ -1996,6 +2079,8 @@ export default function TaskApp() {
           obstacles: flowNodes
             .filter((node) => node.id !== edge.source && node.id !== edge.target)
             .map(nodeRect),
+          sourceDockOffset: sourceOffsets.get(edge.id) ?? 0,
+          targetDockOffset: targetOffsets.get(edge.id) ?? 0,
         },
         markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: selected ? "var(--blue)" : "var(--edge)" },
         style: { stroke: "var(--edge)", strokeWidth: 1.35 },
