@@ -22,8 +22,8 @@ import {
   useNodesState,
   ViewportPortal,
 } from "@xyflow/react";
-import { FormEvent, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { AppearanceIcon, ArrangeIcon, CheckIcon, CloseIcon, GripIcon, InfoIcon, PlusIcon, RedoIcon, SettingsIcon, SidebarIcon, TrashIcon, UndoIcon } from "./icons";
+import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { AppearanceIcon, ArrangeIcon, CheckIcon, ChevronIcon, CloseIcon, GripIcon, InfoIcon, PlusIcon, RedoIcon, SettingsIcon, SidebarIcon, TrashIcon, UndoIcon } from "./icons";
 
 type Point = { x: number; y: number };
 type Size = { width: number; height: number };
@@ -72,6 +72,7 @@ type ConnectionSide = "top" | "right" | "bottom" | "left";
 const STORAGE_KEY = "tangle-task-data-v1";
 const LAYOUT_DIRECTION_KEY = "tangle-layout-direction-v1";
 const APPEARANCE_KEY = "tangle-appearance-v1";
+const COMPLETION_SETTLE_MS = 640;
 const NODE_MIN_WIDTH = 230;
 const NODE_MAX_AUTO_WIDTH = 360;
 const NODE_MAX_WIDTH = 560;
@@ -706,6 +707,9 @@ function dependencyIssueMessage(issue: Exclude<DependencyIssue, null>) {
 function ListView({
   tasks,
   blockedIds,
+  settlingCompletedIds,
+  completedTasksOpen,
+  onCompletedTasksOpenChange,
   onToggle,
   onRename,
   onInspect,
@@ -713,9 +717,13 @@ function ListView({
   onReorder,
   inspectedTaskId,
   selectedTaskId,
+  quickAdd,
 }: {
   tasks: Task[];
   blockedIds: Set<string>;
+  settlingCompletedIds: Set<string>;
+  completedTasksOpen: boolean;
+  onCompletedTasksOpenChange: (open: boolean) => void;
   onToggle: (id: string) => void;
   onRename: (id: string, title: string) => void;
   onInspect: (id: string) => void;
@@ -723,102 +731,134 @@ function ListView({
   onReorder: (draggedId: string, targetId: string) => void;
   inspectedTaskId: string | null;
   selectedTaskId: string | null;
+  quickAdd: ReactNode;
 }) {
   const [dragged, setDragged] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
   const draggedRef = useRef<string | null>(null);
+  const activeTasks = tasks.filter((task) => !task.completed || settlingCompletedIds.has(task.id));
+  const completedTasks = tasks.filter((task) => task.completed && !settlingCompletedIds.has(task.id));
+  const reorderTargetAt = (x: number, y: number) => document
+    .elementFromPoint(x, y)
+    ?.closest<HTMLElement>(".task-row[data-reorderable='true']");
 
-  if (!tasks.length) {
-    return (
-      <div className="empty-state">
-        <div className="empty-check"><CheckIcon /></div>
-        <p>Nothing here yet.</p>
-        <span>Add a task below to get started.</span>
-      </div>
-    );
-  }
-
-  return (
-    <div className="task-list" role="list">
-      {tasks.map((task) => (
-        <div
-          key={task.id}
-          role="listitem"
-          data-task-id={task.id}
-          className={`task-row ${task.completed ? "is-completed" : ""} ${blockedIds.has(task.id) ? "is-blocked" : ""} ${inspectedTaskId === task.id ? "is-inspected" : ""} ${selectedTaskId === task.id ? "is-selected" : ""} ${dragged === task.id ? "is-dragging" : ""} ${over === task.id ? "is-drop-target" : ""}`}
-          onPointerDownCapture={() => onSelect(task.id)}
-          onDoubleClick={(event) => {
-            const target = event.target as HTMLElement;
-            if (target.closest(".inline-title, .inline-title-input, .row-info, .check-button, .drag-grip")) return;
-            onInspect(task.id);
-          }}
-          onPointerDown={(event) => {
-            if (!(event.target as HTMLElement).closest(".drag-grip")) return;
-            if (event.pointerType === "mouse") return;
-            event.preventDefault();
-            draggedRef.current = task.id;
-            setDragged(task.id);
-            event.currentTarget.setPointerCapture(event.pointerId);
-          }}
-          onPointerMove={(event) => {
-            if (draggedRef.current !== task.id) return;
-            const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>(".task-row");
-            const targetId = target?.dataset.taskId;
+  const renderTaskRow = (task: Task, reorderable: boolean) => (
+    <div
+      key={task.id}
+      role="listitem"
+      data-task-id={task.id}
+      data-reorderable={reorderable}
+      className={`task-row ${task.completed ? "is-completed" : ""} ${settlingCompletedIds.has(task.id) ? "is-settling" : ""} ${blockedIds.has(task.id) ? "is-blocked" : ""} ${inspectedTaskId === task.id ? "is-inspected" : ""} ${selectedTaskId === task.id ? "is-selected" : ""} ${dragged === task.id ? "is-dragging" : ""} ${over === task.id ? "is-drop-target" : ""}`}
+      onPointerDownCapture={() => onSelect(task.id)}
+      onDoubleClick={(event) => {
+        const target = event.target as HTMLElement;
+        if (target.closest(".inline-title, .inline-title-input, .row-info, .check-button, .drag-grip")) return;
+        onInspect(task.id);
+      }}
+      onPointerDown={(event) => {
+        if (!reorderable || !(event.target as HTMLElement).closest(".drag-grip")) return;
+        if (event.pointerType === "mouse") return;
+        event.preventDefault();
+        draggedRef.current = task.id;
+        setDragged(task.id);
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }}
+      onPointerMove={(event) => {
+        if (draggedRef.current !== task.id) return;
+        const targetId = reorderTargetAt(event.clientX, event.clientY)?.dataset.taskId;
+        setOver(targetId && targetId !== task.id ? targetId : null);
+      }}
+      onPointerUp={(event) => {
+        if (draggedRef.current !== task.id) return;
+        const targetId = reorderTargetAt(event.clientX, event.clientY)?.dataset.taskId;
+        if (targetId && targetId !== task.id) onReorder(task.id, targetId);
+        draggedRef.current = null;
+        setDragged(null);
+        setOver(null);
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }}
+      onPointerCancel={() => {
+        draggedRef.current = null;
+        setDragged(null);
+        setOver(null);
+      }}
+    >
+      <span
+        className={`drag-grip ${reorderable ? "" : "is-placeholder"}`}
+        aria-hidden="true"
+        onMouseDown={reorderable ? (event) => {
+          event.preventDefault();
+          draggedRef.current = task.id;
+          setDragged(task.id);
+          const handleMove = (moveEvent: MouseEvent) => {
+            const targetId = reorderTargetAt(moveEvent.clientX, moveEvent.clientY)?.dataset.taskId;
             setOver(targetId && targetId !== task.id ? targetId : null);
-          }}
-          onPointerUp={(event) => {
-            if (draggedRef.current !== task.id) return;
-            const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>(".task-row");
-            const targetId = target?.dataset.taskId;
+          };
+          const handleUp = (upEvent: MouseEvent) => {
+            const targetId = reorderTargetAt(upEvent.clientX, upEvent.clientY)?.dataset.taskId;
             if (targetId && targetId !== task.id) onReorder(task.id, targetId);
             draggedRef.current = null;
             setDragged(null);
             setOver(null);
-            event.currentTarget.releasePointerCapture(event.pointerId);
-          }}
-          onPointerCancel={() => {
-            draggedRef.current = null;
-            setDragged(null);
-            setOver(null);
-          }}
-        >
-          <span
-            className="drag-grip"
-            aria-hidden="true"
-            onMouseDown={(event) => {
-              event.preventDefault();
-              draggedRef.current = task.id;
-              setDragged(task.id);
-              const handleMove = (moveEvent: MouseEvent) => {
-                const target = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY)?.closest<HTMLElement>(".task-row");
-                const targetId = target?.dataset.taskId;
-                setOver(targetId && targetId !== task.id ? targetId : null);
-              };
-              const handleUp = (upEvent: MouseEvent) => {
-                const target = document.elementFromPoint(upEvent.clientX, upEvent.clientY)?.closest<HTMLElement>(".task-row");
-                const targetId = target?.dataset.taskId;
-                if (targetId && targetId !== task.id) onReorder(task.id, targetId);
-                draggedRef.current = null;
-                setDragged(null);
-                setOver(null);
-                window.removeEventListener("mousemove", handleMove);
-              };
-              window.addEventListener("mousemove", handleMove);
-              window.addEventListener("mouseup", handleUp, { once: true });
-            }}
-          ><GripIcon /></span>
-          <CheckButton
-            checked={task.completed}
-            onClick={() => onToggle(task.id)}
-            label={task.completed ? `Mark ${task.title} incomplete` : `Complete ${task.title}`}
-          />
-          <InlineTitle title={task.title} completed={task.completed} onSave={(title) => onRename(task.id, title)} />
-          <button type="button" className="row-info" onClick={() => onInspect(task.id)} aria-label={`Show details for ${task.title}`}>
-            <InfoIcon />
-          </button>
-        </div>
-      ))}
+            window.removeEventListener("mousemove", handleMove);
+          };
+          window.addEventListener("mousemove", handleMove);
+          window.addEventListener("mouseup", handleUp, { once: true });
+        } : undefined}
+      >{reorderable && <GripIcon />}</span>
+      <CheckButton
+        checked={task.completed}
+        onClick={() => onToggle(task.id)}
+        label={task.completed ? `Mark ${task.title} incomplete` : `Complete ${task.title}`}
+      />
+      <InlineTitle title={task.title} completed={task.completed} onSave={(title) => onRename(task.id, title)} />
+      <button type="button" className="row-info" onClick={() => onInspect(task.id)} aria-label={`Show details for ${task.title}`}>
+        <InfoIcon />
+      </button>
     </div>
+  );
+
+  if (!tasks.length) {
+    return (
+      <>
+        <div className="empty-state">
+          <div className="empty-check"><CheckIcon /></div>
+          <p>Nothing here yet.</p>
+          <span>Add a task below to get started.</span>
+        </div>
+        {quickAdd}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div className="task-list" role="list" aria-label="Incomplete tasks">
+        {activeTasks.map((task) => renderTaskRow(task, !task.completed))}
+      </div>
+      {quickAdd}
+      {completedTasks.length > 0 && (
+        <section className={`completed-section ${completedTasksOpen ? "is-open" : ""}`} aria-label="Completed tasks">
+          <button
+            type="button"
+            className="completed-toggle"
+            onClick={() => onCompletedTasksOpenChange(!completedTasksOpen)}
+            aria-expanded={completedTasksOpen}
+            aria-controls="completed-task-list"
+          >
+            <ChevronIcon />
+            <span>Completed</span>
+            <span aria-hidden="true">·</span>
+            <span>{completedTasks.length}</span>
+          </button>
+          {completedTasksOpen && (
+            <div id="completed-task-list" className="completed-task-list" role="list">
+              {completedTasks.map((task) => renderTaskRow(task, false))}
+            </div>
+          )}
+        </section>
+      )}
+    </>
   );
 }
 
@@ -1088,9 +1128,12 @@ export default function TaskApp() {
   const [arrangementOptionsOpen, setArrangementOptionsOpen] = useState(false);
   const [appearance, setAppearance] = useState<Appearance>("system");
   const [appearanceOptionsOpen, setAppearanceOptionsOpen] = useState(false);
+  const [completedTasksOpen, setCompletedTasksOpen] = useState(false);
+  const [settlingCompletedIds, setSettlingCompletedIds] = useState<Set<string>>(() => new Set());
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const positionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const arrangeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const completionTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const arrangeFrame = useRef<number | null>(null);
   const arrangementVersion = useRef(0);
   const arrangedLayerByTask = useRef<Map<string, number>>(new Map());
@@ -1262,7 +1305,24 @@ export default function TaskApp() {
     if (positionSaveTimer.current) clearTimeout(positionSaveTimer.current);
     if (arrangeTimer.current) clearTimeout(arrangeTimer.current);
     if (arrangeFrame.current) cancelAnimationFrame(arrangeFrame.current);
+    completionTimers.current.forEach((timer) => clearTimeout(timer));
   }, []);
+
+  useEffect(() => {
+    const completedIds = new Set(data.tasks.filter((task) => task.completed).map((task) => task.id));
+    setSettlingCompletedIds((current) => {
+      const staleIds = [...current].filter((id) => !completedIds.has(id));
+      if (!staleIds.length) return current;
+      staleIds.forEach((id) => {
+        const timer = completionTimers.current.get(id);
+        if (timer) clearTimeout(timer);
+        completionTimers.current.delete(id);
+      });
+      const next = new Set(current);
+      staleIds.forEach((id) => next.delete(id));
+      return next;
+    });
+  }, [data.tasks]);
 
   useEffect(() => {
     const handleDelete = (event: globalThis.KeyboardEvent) => {
@@ -1316,11 +1376,40 @@ export default function TaskApp() {
   }, [data]);
 
   const toggleTask = useCallback((id: string) => {
+    const task = data.tasks.find((candidate) => candidate.id === id);
+    if (!task) return;
+
+    const existingTimer = completionTimers.current.get(id);
+    if (existingTimer) clearTimeout(existingTimer);
+    completionTimers.current.delete(id);
+
+    if (task.completed) {
+      setSettlingCompletedIds((current) => {
+        if (!current.has(id)) return current;
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+    } else {
+      setSettlingCompletedIds((current) => new Set(current).add(id));
+      const delay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : COMPLETION_SETTLE_MS;
+      const timer = setTimeout(() => {
+        setSettlingCompletedIds((current) => {
+          if (!current.has(id)) return current;
+          const next = new Set(current);
+          next.delete(id);
+          return next;
+        });
+        completionTimers.current.delete(id);
+      }, delay);
+      completionTimers.current.set(id, timer);
+    }
+
     updateData((current) => ({
       ...current,
       tasks: current.tasks.map((task) => task.id === id ? { ...task, completed: !task.completed } : task),
     }));
-  }, [updateData]);
+  }, [data.tasks, updateData]);
 
   const renameTask = useCallback((id: string, title: string) => {
     clearArrangement();
@@ -1764,22 +1853,25 @@ export default function TaskApp() {
 
   const revealTaskInList = useCallback((id: string) => {
     if (!isDesktopWorkspace || !tasksPaneOpen) return;
+    if (data.tasks.find((task) => task.id === id)?.completed) setCompletedTasksOpen(true);
     window.requestAnimationFrame(() => {
-      const pane = document.getElementById("tasks-pane");
-      const row = pane?.querySelector<HTMLElement>(`.task-row[data-task-id="${CSS.escape(id)}"]`);
-      if (!pane || !row) return;
+      window.requestAnimationFrame(() => {
+        const pane = document.getElementById("tasks-pane");
+        const row = pane?.querySelector<HTMLElement>(`.task-row[data-task-id="${CSS.escape(id)}"]`);
+        if (!pane || !row) return;
 
-      const paneBounds = pane.getBoundingClientRect();
-      const rowBounds = row.getBoundingClientRect();
-      const margin = 8;
-      const isVisible = rowBounds.top >= paneBounds.top + margin && rowBounds.bottom <= paneBounds.bottom - margin;
-      if (isVisible) return;
-      row.scrollIntoView({
-        block: "nearest",
-        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+        const paneBounds = pane.getBoundingClientRect();
+        const rowBounds = row.getBoundingClientRect();
+        const margin = 8;
+        const isVisible = rowBounds.top >= paneBounds.top + margin && rowBounds.bottom <= paneBounds.bottom - margin;
+        if (isVisible) return;
+        row.scrollIntoView({
+          block: "nearest",
+          behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+        });
       });
     });
-  }, [isDesktopWorkspace, tasksPaneOpen]);
+  }, [data.tasks, isDesktopWorkspace, tasksPaneOpen]);
 
   const selectTaskFromList = useCallback((id: string) => {
     setSelectedTaskId(id);
@@ -1805,6 +1897,9 @@ export default function TaskApp() {
       <ListView
         tasks={data.tasks}
         blockedIds={blockedIds}
+        settlingCompletedIds={settlingCompletedIds}
+        completedTasksOpen={completedTasksOpen}
+        onCompletedTasksOpenChange={setCompletedTasksOpen}
         onToggle={toggleTask}
         onRename={renameTask}
         onInspect={setInspectedTaskId}
@@ -1812,12 +1907,14 @@ export default function TaskApp() {
         onReorder={reorderTasks}
         inspectedTaskId={inspectedTaskId}
         selectedTaskId={selectedTaskId}
+        quickAdd={(
+          <form className="quick-add" onSubmit={addTask}>
+            <PlusIcon />
+            <input value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="New task" aria-label="New task title" />
+            <button type="submit" disabled={!newTask.trim()}>Add</button>
+          </form>
+        )}
       />
-      <form className="quick-add" onSubmit={addTask}>
-        <PlusIcon />
-        <input value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="New task" aria-label="New task title" />
-        <button type="submit" disabled={!newTask.trim()}>Add</button>
-      </form>
     </div>
   );
 

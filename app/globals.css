@@ -194,10 +194,12 @@ button { color: inherit; }
 .task-row.is-drop-target::before { background: var(--blue); }
 .task-row.is-blocked:not(.is-completed) .inline-title { color: var(--muted); }
 .task-row.is-completed { opacity: 0.58; }
+.task-row.is-settling { z-index: 1; overflow: hidden; animation: task-complete-settle 640ms cubic-bezier(.4, 0, .2, 1) both; }
 .task-row.is-inspected { background: var(--selection-faint); }
 .task-row.is-selected { background: var(--selection-soft); }
 .task-row.is-dragging { opacity: 0.48; }
 .drag-grip { color: var(--faint); width: 12px; opacity: 0; cursor: grab; touch-action: none; transition: opacity 120ms ease; }
+.drag-grip.is-placeholder { visibility: hidden; cursor: default; }
 .drag-grip svg { width: 10px; display: block; }
 .task-row:hover .drag-grip { opacity: 1; }
 
@@ -227,6 +229,14 @@ button { color: inherit; }
 .quick-add button { border: 0; background: transparent; color: var(--blue); font-size: 13px; padding: 7px 9px; border-radius: 5px; cursor: pointer; opacity: 1; }
 .quick-add button:disabled { opacity: 0; pointer-events: none; }
 .quick-add button:hover { background: var(--blue-soft); }
+
+.completed-section { margin-top: 10px; border-top: 1px solid var(--border); }
+.completed-toggle { width: 100%; height: 41px; padding: 0 8px; display: flex; align-items: center; gap: 4px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 540; cursor: pointer; transition: color 120ms ease, background 120ms ease; }
+.completed-toggle:hover { background: var(--surface-hover); color: var(--text-secondary); }
+.completed-toggle:focus-visible { outline: 2px solid var(--blue-ring); outline-offset: 1px; }
+.completed-toggle svg { width: 14px; height: 14px; margin-right: 2px; transition: transform 140ms ease; }
+.completed-section.is-open .completed-toggle svg { transform: rotate(90deg); }
+.completed-task-list { border-top: 1px solid var(--border); animation: connection-tool-in 140ms ease-out; }
 
 .empty-state { min-height: 260px; display: flex; align-items: center; flex-direction: column; justify-content: center; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); color: var(--muted); }
 .empty-check { width: 35px; height: 35px; display: grid; place-items: center; border: 1px solid var(--border-strong); color: var(--faint); border-radius: 50%; margin-bottom: 14px; }
@@ -385,6 +395,12 @@ button { color: inherit; }
 
 @keyframes inspector-in { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: translateX(0); } }
 @keyframes connection-tool-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes task-complete-settle {
+  0% { height: 55px; opacity: 1; transform: translateX(0); }
+  55% { height: 55px; opacity: .58; transform: translateX(2px); }
+  72% { height: 55px; opacity: .58; transform: translateX(2px); }
+  100% { height: 0; opacity: 0; transform: translateX(4px); border-bottom-color: transparent; }
+}
 
 .notice { position: fixed; left: 50%; bottom: 28px; z-index: 50; transform: translate(-50%, 12px); padding: 9px 12px; background: var(--toast-bg); color: var(--toast-text); border-radius: 7px; box-shadow: 0 5px 20px var(--shadow-medium); font-size: 12px; opacity: 0; pointer-events: none; transition: opacity 160ms ease, transform 160ms ease; }
 .notice.is-visible { opacity: 1; transform: translate(-50%, 0); }

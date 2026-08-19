@@ -100,6 +100,14 @@ export function AppearanceIcon(props: IconProps) {
   );
 }
 
+export function ChevronIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
+      <path d="m5.75 3.5 4.5 4.5-4.5 4.5" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export function SidebarIcon(props: IconProps) {
   return (
     <svg viewBox="0 0 18 18" fill="none" aria-hidden="true" {...props}>
