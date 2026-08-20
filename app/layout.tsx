@@ -2,9 +2,30 @@ import type { Metadata } from "next";
 import "@xyflow/react/dist/style.css";
 import "./globals.css";
 
+const description = "A quiet personal task list with visual dependencies.";
+const productionHost = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+
 export const metadata: Metadata = {
-  title: "Tangle",
-  description: "A quiet task list with visual dependencies.",
+  metadataBase: new URL(productionHost ? `https://${productionHost}` : "http://localhost:3000"),
+  title: {
+    default: "Tangle",
+    template: "%s · Tangle",
+  },
+  description,
+  applicationName: "Tangle",
+  category: "productivity",
+  openGraph: {
+    type: "website",
+    url: "/",
+    siteName: "Tangle",
+    title: "Tangle — Tasks, clearly connected",
+    description,
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Tangle — Tasks, clearly connected",
+    description,
+  },
 };
 
 const appearanceScript = `
