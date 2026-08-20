@@ -21,8 +21,8 @@ import {
   useNodesState,
   ViewportPortal,
 } from "@xyflow/react";
-import { FormEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { AppearanceIcon, ArrangeIcon, CheckIcon, ChevronIcon, CloseIcon, GripIcon, InfoIcon, PlusIcon, RedoIcon, SettingsIcon, SidebarIcon, TrashIcon, UndoIcon } from "./icons";
+import { FormEvent, Fragment, KeyboardEvent as ReactKeyboardEvent, ReactNode, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { AppearanceIcon, ArrangeIcon, CheckIcon, ChevronIcon, CloseIcon, GripIcon, InfoIcon, PlusIcon, RedoIcon, SettingsIcon, SidebarIcon, SortIcon, TrashIcon, UndoIcon } from "./icons";
 
 type Point = { x: number; y: number };
 type Size = { width: number; height: number };
@@ -33,6 +33,7 @@ type TaskData = { tasks: Task[]; dependencies: Dependency[] };
 type View = "list" | "graph";
 type Appearance = "system" | "light" | "dark";
 type LayoutDirection = "vertical" | "horizontal";
+type ListOrder = "manual" | "up-next";
 type DropPlacement = "before" | "after";
 type DropTarget = { id: string; placement: DropPlacement };
 type LayoutGuide = { id: string; x: number; y: number; width: number; height: number };
@@ -79,6 +80,7 @@ type ConnectionSide = "top" | "right" | "bottom" | "left";
 const STORAGE_KEY = "tangle-task-data-v1";
 const LAYOUT_DIRECTION_KEY = "tangle-layout-direction-v1";
 const APPEARANCE_KEY = "tangle-appearance-v1";
+const LIST_ORDER_KEY = "tangle-list-order-v1";
 const COMPLETION_SETTLE_MS = 640;
 const NODE_MIN_WIDTH = 230;
 const NODE_MAX_AUTO_WIDTH = 360;
@@ -273,6 +275,68 @@ function minimumNodeHeight(title: string, width: number) {
 function automaticNodeSize(title: string): Size {
   const width = Math.min(NODE_MAX_AUTO_WIDTH, Math.max(NODE_MIN_WIDTH, Math.ceil(estimatedTextWidth(title) + 58)));
   return { width, height: minimumNodeHeight(title, width) };
+}
+
+function upNextTaskOrder(tasks: Task[], dependencies: Dependency[]) {
+  const taskIds = new Set(tasks.map((task) => task.id));
+  const manualIndex = new Map(tasks.map((task, index) => [task.id, index]));
+  const outgoing = new Map(tasks.map((task) => [task.id, [] as string[]]));
+  const indegree = new Map(tasks.map((task) => [task.id, 0]));
+
+  dependencies.forEach(({ source, target }) => {
+    if (!taskIds.has(source) || !taskIds.has(target)) return;
+    outgoing.get(source)?.push(target);
+    indegree.set(target, (indegree.get(target) ?? 0) + 1);
+  });
+
+  const downstreamReach = new Map<string, number>();
+  tasks.forEach((task) => {
+    const descendants = new Set<string>();
+    const queue = [...(outgoing.get(task.id) ?? [])];
+    while (queue.length) {
+      const descendant = queue.shift()!;
+      if (descendants.has(descendant)) continue;
+      descendants.add(descendant);
+      queue.push(...(outgoing.get(descendant) ?? []));
+    }
+    downstreamReach.set(task.id, descendants.size);
+  });
+
+  const taskById = new Map(tasks.map((task) => [task.id, task]));
+  const ordered: Task[] = [];
+  const placed = new Set<string>();
+  let layer = tasks.filter((task) => indegree.get(task.id) === 0).map((task) => task.id);
+  const unlockedCount = layer.length;
+
+  while (layer.length) {
+    layer.sort((left, right) => {
+      const leftUnlocks = (outgoing.get(left) ?? []).filter((target) => indegree.get(target) === 1).length;
+      const rightUnlocks = (outgoing.get(right) ?? []).filter((target) => indegree.get(target) === 1).length;
+      return rightUnlocks - leftUnlocks
+        || (downstreamReach.get(right) ?? 0) - (downstreamReach.get(left) ?? 0)
+        || (manualIndex.get(left) ?? 0) - (manualIndex.get(right) ?? 0);
+    });
+    layer.forEach((id) => {
+      const task = taskById.get(id);
+      if (task) ordered.push(task);
+      placed.add(id);
+    });
+
+    const nextLayer: string[] = [];
+    layer.forEach((source) => {
+      (outgoing.get(source) ?? []).forEach((target) => {
+        const nextIndegree = (indegree.get(target) ?? 0) - 1;
+        indegree.set(target, nextIndegree);
+        if (nextIndegree === 0) nextLayer.push(target);
+      });
+    });
+    layer = nextLayer;
+  }
+
+  tasks.forEach((task) => {
+    if (!placed.has(task.id)) ordered.push(task);
+  });
+  return { tasks: ordered, unlockedCount };
 }
 
 function taskLevels(tasks: Task[], dependencies: Dependency[]) {
@@ -1303,6 +1367,8 @@ function dependencyIssueMessage(issue: Exclude<DependencyIssue, null>) {
 
 function ListView({
   tasks,
+  dependencies,
+  listOrder,
   blockedIds,
   settlingCompletedIds,
   completedTasksOpen,
@@ -1318,6 +1384,8 @@ function ListView({
   quickAdd,
 }: {
   tasks: Task[];
+  dependencies: Dependency[];
+  listOrder: ListOrder;
   blockedIds: Set<string>;
   settlingCompletedIds: Set<string>;
   completedTasksOpen: boolean;
@@ -1336,7 +1404,10 @@ function ListView({
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
   const draggedRef = useRef<string | null>(null);
   const keyboardScopeRef = useRef<HTMLDivElement>(null);
-  const activeTasks = tasks.filter((task) => !task.completed || settlingCompletedIds.has(task.id));
+  const manuallyOrderedActiveTasks = tasks.filter((task) => !task.completed || settlingCompletedIds.has(task.id));
+  const upNextOrder = upNextTaskOrder(manuallyOrderedActiveTasks, dependencies);
+  const activeTasks = listOrder === "up-next" ? upNextOrder.tasks : manuallyOrderedActiveTasks;
+  const waitingStartsAt = listOrder === "up-next" ? upNextOrder.unlockedCount : -1;
   const completedTasks = tasks.filter((task) => task.completed && !settlingCompletedIds.has(task.id));
   const dropTargetAt = (x: number, y: number, draggedId: string): DropTarget | null => {
     const row = document.elementFromPoint(x, y)?.closest<HTMLElement>(".task-row[data-reorderable='true']");
@@ -1513,7 +1584,14 @@ function ListView({
       }}
     >
       <div className="task-list" role="list" aria-label="Incomplete tasks">
-        {activeTasks.map((task) => renderTaskRow(task, !task.completed))}
+        {activeTasks.map((task, index) => (
+          <Fragment key={task.id}>
+            {index === waitingStartsAt && waitingStartsAt < activeTasks.length && (
+              <div className="waiting-divider" role="separator"><span>Waiting</span></div>
+            )}
+            {renderTaskRow(task, listOrder === "manual" && !task.completed)}
+          </Fragment>
+        ))}
       </div>
       {quickAdd}
       {completedTasks.length > 0 && (
@@ -1803,6 +1881,7 @@ export default function TaskApp() {
   const [arrangementOptionsOpen, setArrangementOptionsOpen] = useState(false);
   const [appearance, setAppearance] = useState<Appearance>("system");
   const [appearanceOptionsOpen, setAppearanceOptionsOpen] = useState(false);
+  const [listOrder, setListOrder] = useState<ListOrder>("manual");
   const [completedTasksOpen, setCompletedTasksOpen] = useState(false);
   const [settlingCompletedIds, setSettlingCompletedIds] = useState<Set<string>>(() => new Set());
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1903,6 +1982,8 @@ export default function TaskApp() {
       if (savedAppearance === "light" || savedAppearance === "dark" || savedAppearance === "system") {
         setAppearance(savedAppearance);
       }
+      const savedListOrder = window.localStorage.getItem(LIST_ORDER_KEY);
+      if (savedListOrder === "manual" || savedListOrder === "up-next") setListOrder(savedListOrder);
     } catch {
       // Keep the sample data if saved data is unavailable or malformed.
     }
@@ -1916,6 +1997,10 @@ export default function TaskApp() {
   useEffect(() => {
     if (hydrated) window.localStorage.setItem(LAYOUT_DIRECTION_KEY, layoutDirection);
   }, [hydrated, layoutDirection]);
+
+  useEffect(() => {
+    if (hydrated) window.localStorage.setItem(LIST_ORDER_KEY, listOrder);
+  }, [hydrated, listOrder]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -2714,10 +2799,25 @@ export default function TaskApp() {
     <div className="list-panel">
       <div className="list-heading">
         <h1>Tasks</h1>
-        <p>{data.tasks.filter((task) => !task.completed).length} remaining</p>
+        <div className="list-heading-meta">
+          <p>{data.tasks.filter((task) => !task.completed).length} remaining</p>
+          <button
+            type="button"
+            className={`list-order-button ${listOrder === "up-next" ? "is-up-next" : ""}`}
+            onClick={() => setListOrder((current) => current === "manual" ? "up-next" : "manual")}
+            aria-pressed={listOrder === "up-next"}
+            aria-label={`List order: ${listOrder === "manual" ? "My order" : "Up next"}. Switch to ${listOrder === "manual" ? "Up next" : "My order"}.`}
+            title={`Switch to ${listOrder === "manual" ? "Up next" : "My order"}`}
+          >
+            <SortIcon />
+            <span>{listOrder === "manual" ? "My order" : "Up next"}</span>
+          </button>
+        </div>
       </div>
       <ListView
         tasks={data.tasks}
+        dependencies={data.dependencies}
+        listOrder={listOrder}
         blockedIds={blockedIds}
         settlingCompletedIds={settlingCompletedIds}
         completedTasksOpen={completedTasksOpen}

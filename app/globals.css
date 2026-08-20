@@ -175,12 +175,19 @@ button { color: inherit; }
 .unified-workspace .graph-panel { min-width: 0; min-height: 0; border: 0; border-radius: 0; }
 .list-workspace { padding: 70px 24px 110px; }
 .list-panel { width: min(100%, 680px); margin: 0 auto; }
-.list-heading { display: flex; align-items: baseline; justify-content: space-between; margin: 0 0 23px; padding: 0 8px; }
+.list-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 23px; padding: 0 8px; }
 .list-heading h1 { margin: 0; font-size: 26px; font-weight: 680; letter-spacing: -0.035em; }
 .list-heading p { margin: 0; color: var(--muted); font-size: 12px; }
+.list-heading-meta { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.list-order-button { height: 26px; display: inline-flex; align-items: center; gap: 4px; padding: 0 8px 0 6px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--muted); font-size: 11px; font-weight: 560; white-space: nowrap; cursor: pointer; transition: color 120ms ease, border-color 120ms ease, background 120ms ease; }
+.list-order-button:hover { color: var(--text-secondary); background: var(--surface-hover); }
+.list-order-button.is-up-next { color: var(--blue); border-color: var(--node-border); background: var(--blue-soft); }
+.list-order-button:focus-visible { outline: 2px solid var(--blue-ring); outline-offset: 1px; }
+.list-order-button svg { width: 14px; height: 14px; }
 
 .task-list-keyboard-scope { outline: 0; }
 .task-list { border-top: 1px solid var(--border); }
+.waiting-divider { height: 33px; display: flex; align-items: center; padding: 0 8px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; font-weight: 590; letter-spacing: .01em; }
 .task-row {
   height: 55px;
   display: grid;

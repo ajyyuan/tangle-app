@@ -36,6 +36,14 @@ export function GripIcon(props: IconProps) {
   );
 }
 
+export function SortIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 18 18" fill="none" aria-hidden="true" {...props}>
+      <path d="M4 5h10M6 9h8M8 13h6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function InfoIcon(props: IconProps) {
   return (
     <svg viewBox="0 0 18 18" fill="none" aria-hidden="true" {...props}>
