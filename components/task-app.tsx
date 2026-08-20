@@ -21,7 +21,7 @@ import {
   useNodesState,
   ViewportPortal,
 } from "@xyflow/react";
-import { FormEvent, Fragment, KeyboardEvent as ReactKeyboardEvent, ReactNode, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, Fragment, KeyboardEvent as ReactKeyboardEvent, ReactNode, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppearanceIcon, ArrangeIcon, CheckIcon, ChevronIcon, CloseIcon, GripIcon, InfoIcon, PlusIcon, RedoIcon, SettingsIcon, SidebarIcon, SortIcon, TrashIcon, UndoIcon } from "./icons";
 
 type Point = { x: number; y: number };
@@ -30,6 +30,7 @@ type GraphDraft = { id: string; anchor: Point };
 type Task = { id: string; title: string; completed: boolean; position: Point; size?: Size; notes?: string };
 type Dependency = { id: string; source: string; target: string };
 type TaskData = { tasks: Task[]; dependencies: Dependency[] };
+type PendingImport = { data: TaskData; fileName: string };
 type View = "list" | "graph";
 type Appearance = "system" | "light" | "dark";
 type LayoutDirection = "vertical" | "horizontal";
@@ -81,6 +82,9 @@ const STORAGE_KEY = "tangle-task-data-v1";
 const LAYOUT_DIRECTION_KEY = "tangle-layout-direction-v1";
 const APPEARANCE_KEY = "tangle-appearance-v1";
 const LIST_ORDER_KEY = "tangle-list-order-v1";
+const BACKUP_FORMAT = "tangle-backup";
+const BACKUP_VERSION = 1;
+const MAX_BACKUP_BYTES = 5 * 1024 * 1024;
 const COMPLETION_SETTLE_MS = 640;
 const NODE_MIN_WIDTH = 230;
 const NODE_MAX_AUTO_WIDTH = 360;
@@ -1347,6 +1351,93 @@ function minimalDependencies(dependencies: Dependency[]) {
   return uniqueDependencies.filter((edge) => !hasPath(edge.source, edge.target, uniqueDependencies, edge.id));
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function invalidBackup(message = "This backup is incomplete or damaged."): never {
+  throw new Error(message);
+}
+
+function validatedPoint(value: unknown): Point {
+  if (!isRecord(value) || typeof value.x !== "number" || !Number.isFinite(value.x)
+    || typeof value.y !== "number" || !Number.isFinite(value.y)) {
+    invalidBackup();
+  }
+  return { x: value.x, y: value.y };
+}
+
+function validatedSize(value: unknown): Size {
+  if (!isRecord(value) || typeof value.width !== "number" || !Number.isFinite(value.width)
+    || typeof value.height !== "number" || !Number.isFinite(value.height)
+    || value.width < NODE_MIN_WIDTH || value.width > NODE_MAX_WIDTH
+    || value.height < NODE_MIN_HEIGHT || value.height > NODE_MAX_HEIGHT) {
+    invalidBackup();
+  }
+  return { width: value.width, height: value.height };
+}
+
+function validatedBackup(value: unknown): TaskData {
+  if (!isRecord(value) || value.format !== BACKUP_FORMAT) {
+    invalidBackup("That file isn’t a Tangle backup.");
+  }
+  if (value.version !== BACKUP_VERSION) {
+    invalidBackup("This backup uses an unsupported version.");
+  }
+  if (typeof value.exportedAt !== "string" || Number.isNaN(Date.parse(value.exportedAt)) || !isRecord(value.data)) {
+    invalidBackup();
+  }
+
+  const rawTasks = value.data.tasks;
+  const rawDependencies = value.data.dependencies;
+  if (!Array.isArray(rawTasks) || !Array.isArray(rawDependencies)) invalidBackup();
+
+  const taskIds = new Set<string>();
+  const tasks = rawTasks.map((rawTask): Task => {
+    if (!isRecord(rawTask) || typeof rawTask.id !== "string" || !rawTask.id
+      || typeof rawTask.title !== "string" || !rawTask.title.trim()
+      || typeof rawTask.completed !== "boolean") {
+      invalidBackup();
+    }
+    if (taskIds.has(rawTask.id)) invalidBackup("This backup contains duplicate tasks.");
+    taskIds.add(rawTask.id);
+    if (rawTask.notes !== undefined && typeof rawTask.notes !== "string") invalidBackup();
+    return {
+      id: rawTask.id,
+      title: rawTask.title,
+      completed: rawTask.completed,
+      position: validatedPoint(rawTask.position),
+      ...(rawTask.size === undefined ? {} : { size: validatedSize(rawTask.size) }),
+      ...(rawTask.notes === undefined ? {} : { notes: rawTask.notes }),
+    };
+  });
+
+  const dependencyIds = new Set<string>();
+  const dependencyPairs = new Set<string>();
+  const dependencies = rawDependencies.map((rawDependency): Dependency => {
+    if (!isRecord(rawDependency) || typeof rawDependency.id !== "string" || !rawDependency.id
+      || typeof rawDependency.source !== "string" || typeof rawDependency.target !== "string"
+      || !taskIds.has(rawDependency.source) || !taskIds.has(rawDependency.target)) {
+      invalidBackup("This backup contains an invalid connection.");
+    }
+    if (rawDependency.source === rawDependency.target) {
+      invalidBackup("This backup contains a task connected to itself.");
+    }
+    if (dependencyIds.has(rawDependency.id)) invalidBackup("This backup contains duplicate connections.");
+    dependencyIds.add(rawDependency.id);
+    const pair = `${rawDependency.source}\u0000${rawDependency.target}`;
+    if (dependencyPairs.has(pair)) invalidBackup("This backup contains duplicate connections.");
+    dependencyPairs.add(pair);
+    return { id: rawDependency.id, source: rawDependency.source, target: rawDependency.target };
+  });
+
+  if (dependencies.some((edge) => hasPath(edge.target, edge.source, dependencies, edge.id))) {
+    invalidBackup("This backup contains a dependency loop.");
+  }
+
+  return { tasks, dependencies: minimalDependencies(dependencies) };
+}
+
 type DependencyIssue = "self" | "duplicate" | "cycle" | "implied" | null;
 
 function dependencyIssue(source: string, target: string, dependencies: Dependency[], ignoredEdgeId?: string): DependencyIssue {
@@ -1883,6 +1974,7 @@ export default function TaskApp() {
   const [appearanceOptionsOpen, setAppearanceOptionsOpen] = useState(false);
   const [listOrder, setListOrder] = useState<ListOrder>("manual");
   const [completedTasksOpen, setCompletedTasksOpen] = useState(false);
+  const [pendingImport, setPendingImport] = useState<PendingImport | null>(null);
   const [settlingCompletedIds, setSettlingCompletedIds] = useState<Set<string>>(() => new Set());
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const positionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1896,6 +1988,7 @@ export default function TaskApp() {
   const pendingPreviousArrangement = useRef<ArrangementSnapshot | null | undefined>(undefined);
   const arrangementOptionsRef = useRef<HTMLDivElement>(null);
   const appearanceOptionsRef = useRef<HTMLDivElement>(null);
+  const backupInputRef = useRef<HTMLInputElement>(null);
   const lastPaneClick = useRef<{ time: number; point: Point } | null>(null);
   const pendingNodePositions = useRef<Map<string, Point>>(new Map());
   const pendingNodeSizes = useRef<Map<string, Size>>(new Map());
@@ -2484,6 +2577,92 @@ export default function TaskApp() {
     });
   }, [updateData]);
 
+  const downloadBackup = useCallback(() => {
+    const backupData: TaskData = {
+      tasks: data.tasks.map((task) => ({
+        ...task,
+        ...(pendingNodePositions.current.has(task.id)
+          ? { position: pendingNodePositions.current.get(task.id)! }
+          : {}),
+        ...(pendingNodeSizes.current.has(task.id)
+          ? { size: pendingNodeSizes.current.get(task.id)! }
+          : {}),
+      })),
+      dependencies: data.dependencies,
+    };
+    flushNodeLayout();
+    const exportedAt = new Date();
+    const contents = JSON.stringify({
+      format: BACKUP_FORMAT,
+      version: BACKUP_VERSION,
+      exportedAt: exportedAt.toISOString(),
+      data: backupData,
+    }, null, 2);
+    const url = URL.createObjectURL(new Blob([contents], { type: "application/json" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `tangle-backup-${exportedAt.toISOString().slice(0, 10)}.json`;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    showNotice("Backup downloaded.");
+  }, [data, flushNodeLayout, showNotice]);
+
+  const chooseBackupFile = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    setPendingImport(null);
+    if (file.size > MAX_BACKUP_BYTES) {
+      showNotice("That backup is too large to restore.");
+      return;
+    }
+
+    let contents: string;
+    try {
+      contents = await file.text();
+    } catch {
+      showNotice("Couldn’t read that file.");
+      return;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(contents);
+    } catch {
+      showNotice("That file isn’t valid JSON.");
+      return;
+    }
+
+    try {
+      setPendingImport({ data: validatedBackup(parsed), fileName: file.name });
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : "Couldn’t restore that backup.");
+    }
+  }, [showNotice]);
+
+  const restoreBackup = useCallback(() => {
+    if (!pendingImport) return;
+    clearArrangement();
+    if (positionSaveTimer.current) clearTimeout(positionSaveTimer.current);
+    positionSaveTimer.current = null;
+    pendingNodePositions.current.clear();
+    pendingNodeSizes.current.clear();
+    completionTimers.current.forEach((timer) => clearTimeout(timer));
+    completionTimers.current.clear();
+    setSettlingCompletedIds(new Set());
+    setGraphDraft(null);
+    setInspectedTaskId(null);
+    setSelectedTaskId(null);
+    setSelectedEdgeId(null);
+    setCompletedTasksOpen(false);
+    pendingPreviousArrangement.current = undefined;
+    dispatchHistory({ type: "reset", data: pendingImport.data });
+    setPendingImport(null);
+    showNotice(`Restored ${pendingImport.data.tasks.length} ${pendingImport.data.tasks.length === 1 ? "task" : "tasks"}.`);
+  }, [clearArrangement, pendingImport, showNotice]);
+
   const handleFlowNodesChange = useCallback((changes: NodeChange<TaskFlowNode>[]) => {
     onFlowNodesChange(changes);
     let sizeChanged = false;
@@ -2838,6 +3017,36 @@ export default function TaskApp() {
           </form>
         )}
       />
+      <div className="local-data">
+        <div className="local-data-note" role="note">
+          <InfoIcon />
+          <p>Your tasks are stored only in this browser. They aren’t uploaded or synced.</p>
+        </div>
+        <div className="local-data-actions">
+          <button type="button" onClick={downloadBackup} aria-label="Download a Tangle backup">Back up</button>
+          <button type="button" onClick={() => backupInputRef.current?.click()} aria-label="Restore from a Tangle backup">Restore…</button>
+          <input
+            ref={backupInputRef}
+            type="file"
+            accept="application/json,.json"
+            onChange={chooseBackupFile}
+            aria-label="Choose a Tangle backup"
+            hidden
+          />
+        </div>
+        {pendingImport && (
+          <div className="restore-confirmation" role="alertdialog" aria-labelledby="restore-confirmation-title">
+            <p>
+              <strong id="restore-confirmation-title">Replace all tasks?</strong>
+              <span>{pendingImport.fileName} contains {pendingImport.data.tasks.length} {pendingImport.data.tasks.length === 1 ? "task" : "tasks"}. Your current tasks will be replaced. This can’t be undone.</span>
+            </p>
+            <div>
+              <button type="button" onClick={() => setPendingImport(null)}>Cancel</button>
+              <button type="button" className="confirm-restore" onClick={restoreBackup}>Restore</button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 

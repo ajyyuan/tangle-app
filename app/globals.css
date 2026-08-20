@@ -250,6 +250,22 @@ button { color: inherit; }
 .completed-section.is-open .completed-toggle svg { transform: rotate(90deg); }
 .completed-task-list { border-top: 1px solid var(--border); animation: connection-tool-in 140ms ease-out; }
 
+.local-data { margin: 24px 8px 0; }
+.local-data-note { display: flex; align-items: flex-start; gap: 7px; color: var(--muted); }
+.local-data-note svg { width: 14px; height: 14px; flex: 0 0 14px; margin-top: 1px; color: var(--faint); }
+.local-data-note p { margin: 0; font-size: 11px; line-height: 16px; }
+.local-data-actions { display: flex; gap: 5px; margin: 9px 0 0 21px; }
+.local-data-actions button, .restore-confirmation button { height: 27px; padding: 0 9px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--text-secondary); font-size: 11px; cursor: pointer; transition: color 120ms ease, border-color 120ms ease, background 120ms ease; }
+.local-data-actions button:hover, .restore-confirmation button:hover { background: var(--surface-hover); color: var(--text-strong); }
+.local-data-actions button:focus-visible, .restore-confirmation button:focus-visible { outline: 2px solid var(--blue-ring); outline-offset: 1px; }
+.restore-confirmation { margin-top: 12px; padding: 11px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface-muted); }
+.restore-confirmation p { margin: 0; color: var(--muted); font-size: 11px; line-height: 16px; overflow-wrap: anywhere; }
+.restore-confirmation strong, .restore-confirmation span { display: block; }
+.restore-confirmation strong { margin-bottom: 2px; color: var(--text-secondary); font-weight: 620; }
+.restore-confirmation > div { display: flex; justify-content: flex-end; gap: 5px; margin-top: 10px; }
+.restore-confirmation .confirm-restore { border-color: var(--blue); background: var(--blue); color: var(--white); }
+.restore-confirmation .confirm-restore:hover { background: var(--blue); color: var(--white); filter: brightness(.94); }
+
 .empty-state { min-height: 260px; display: flex; align-items: center; flex-direction: column; justify-content: center; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); color: var(--muted); }
 .empty-check { width: 35px; height: 35px; display: grid; place-items: center; border: 1px solid var(--border-strong); color: var(--faint); border-radius: 50%; margin-bottom: 14px; }
 .empty-check svg { width: 19px; }
