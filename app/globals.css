@@ -257,7 +257,9 @@ button { color: inherit; }
 .react-flow__node:active { cursor: grabbing; }
 .react-flow__node:has(.task-node.is-draft), .react-flow__node:has(.task-node.is-draft):active { cursor: text; }
 .graph-panel.is-arranging .react-flow__node { transition: transform 340ms cubic-bezier(.22,.75,.25,1); }
+.react-flow__node.spacing-snapping { transition: transform 180ms cubic-bezier(.22,.75,.25,1); }
 .react-flow__node.selected .task-node { border-color: var(--blue); box-shadow: 0 0 0 3px var(--selection-soft); }
+.react-flow__node.spacing-invalid .task-node { border-color: var(--danger); background: var(--danger-surface); box-shadow: 0 0 0 4px var(--danger-soft); }
 .react-flow__viewport-portal { z-index: -1; pointer-events: none; }
 .layout-guides { position: absolute; inset: 0; pointer-events: none; }
 .layout-guide { position: absolute; background: transparent; }
@@ -282,7 +284,8 @@ button { color: inherit; }
 .node-resize-control { width: 10px !important; height: 10px !important; right: -5px !important; bottom: -5px !important; z-index: 4; border: 2px solid var(--surface) !important; border-radius: 3px !important; background: var(--blue) !important; box-shadow: 0 0 0 1px var(--blue-ring); cursor: nwse-resize; opacity: 0; pointer-events: none; transition: opacity 100ms ease; }
 .task-node:hover .node-resize-control, .node-resize-control:active { opacity: 1; pointer-events: all; }
 
-.connection-handle { width: 28px !important; height: 28px !important; min-width: 28px !important; min-height: 28px !important; border: 0 !important; background: transparent !important; }
+.connection-handle { width: 8px !important; height: 8px !important; min-width: 8px !important; min-height: 8px !important; border: 0 !important; background: transparent !important; }
+.connection-handle::before { content: ""; position: absolute; left: 50%; top: 50%; width: 28px; height: 28px; transform: translate(-50%, -50%); }
 .connection-handle::after { content: ""; position: absolute; left: 50%; top: 50%; width: 9px; height: 9px; border: 2px solid var(--surface); border-radius: 50%; background: var(--muted); opacity: 0; transform: translate(-50%, -50%) scale(.86); transition: opacity 100ms ease, background 100ms ease, transform 100ms ease, box-shadow 100ms ease; }
 .task-node-content:hover ~ .connection-source-handle::after,
 .task-node-content:focus-within ~ .connection-source-handle::after { opacity: 1; transform: translate(-50%, -50%) scale(1); }
@@ -295,11 +298,13 @@ button { color: inherit; }
 .connection-target-handle.connectingto::after, .connection-target-handle.valid::after { opacity: 1; background: var(--blue); transform: translate(-50%, -50%) scale(1.18); box-shadow: 0 0 0 4px var(--selection-soft); }
 .task-node:has(.connection-target-handle.connectingto),
 .task-node:has(.connection-target-handle.valid) { border-color: var(--blue); box-shadow: 0 0 0 3px var(--selection-soft); }
-.connection-handle-top { top: -5px !important; }
-.connection-handle-right { right: -5px !important; }
-.connection-handle-bottom { bottom: -5px !important; }
-.connection-handle-left { left: -5px !important; }
+.connection-handle-top { top: 0 !important; }
+.connection-handle-right { right: 0 !important; }
+.connection-handle-bottom { bottom: 0 !important; }
+.connection-handle-left { left: 0 !important; }
 .react-flow__edge-path { transition: stroke 120ms ease, stroke-width 120ms ease; }
+.react-flow__edge { transition: opacity 120ms ease; }
+.react-flow__edge.is-spacing-muted { opacity: .18; }
 .react-flow__edge:hover .react-flow__edge-path, .react-flow__edge.selected .react-flow__edge-path { stroke: var(--blue) !important; stroke-width: 2 !important; }
 .react-flow__edge.selected .react-flow__edge-path { filter: drop-shadow(0 0 2px var(--blue-ring)); }
 .edge-endpoint-indicator { fill: var(--surface); stroke: var(--blue); stroke-width: 1.8; pointer-events: none; filter: drop-shadow(0 1px 1px var(--shadow-medium)); }

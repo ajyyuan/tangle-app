@@ -90,15 +90,19 @@ const HISTORY_LIMIT = 100;
 const EDGE_RECONNECT_RADIUS = 18;
 const EDGE_ROUTE_CLEARANCE = 12;
 const EDGE_ROUTE_STUB = 20;
+const EDGE_MIN_APPROACH = 16;
 const EDGE_ROUTE_BEND_PENALTY = 16;
+const EDGE_DOCK_SWITCH_THRESHOLD = 24;
 const EDGE_CORNER_RADIUS = 5;
 const EDGE_DOCK_SPACING = 14;
 const EDGE_DOCK_INSET = 12;
+const EDGE_HANDLE_OUTSET = 4;
 const NODE_CONNECTION_RADIUS = 28;
+const NODE_MIN_CLEARANCE = 16;
 const LAYOUT_START_X = 72;
 const LAYOUT_START_Y = 72;
 const LAYOUT_LAYER_GAP = 110;
-const LAYOUT_SIBLING_GAP = 46;
+const LAYOUT_SIBLING_GAP = NODE_MIN_CLEARANCE;
 const LAYOUT_GUIDE_EXTENT = 50_000;
 const DESKTOP_WORKSPACE_QUERY = "(min-width: 1180px)";
 const CONNECTION_SIDES: { side: ConnectionSide; position: Position }[] = [
@@ -160,17 +164,73 @@ function uid() {
     : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function nextOpenPosition(tasks: Task[]): Point {
+function rectAt(position: Point, size: Size): Rect {
+  return {
+    left: position.x,
+    top: position.y,
+    right: position.x + size.width,
+    bottom: position.y + size.height,
+  };
+}
+
+function rectsHaveClearance(left: Rect, right: Rect, clearance = NODE_MIN_CLEARANCE) {
+  return left.right + clearance <= right.left
+    || right.right + clearance <= left.left
+    || left.bottom + clearance <= right.top
+    || right.bottom + clearance <= left.top;
+}
+
+function positionHasClearance(position: Point, size: Size, obstacles: Rect[]) {
+  const rect = rectAt(position, size);
+  return obstacles.every((obstacle) => rectsHaveClearance(rect, obstacle));
+}
+
+function nearestClearPosition(position: Point, size: Size, obstacles: Rect[]): Point {
+  if (positionHasClearance(position, size, obstacles)) return position;
+
+  const xCandidates = new Set([position.x]);
+  const yCandidates = new Set([position.y]);
+  obstacles.forEach((obstacle) => {
+    xCandidates.add(obstacle.left - NODE_MIN_CLEARANCE - size.width);
+    xCandidates.add(obstacle.right + NODE_MIN_CLEARANCE);
+    yCandidates.add(obstacle.top - NODE_MIN_CLEARANCE - size.height);
+    yCandidates.add(obstacle.bottom + NODE_MIN_CLEARANCE);
+  });
+  const candidates: Point[] = [];
+  xCandidates.forEach((x) => candidates.push({ x, y: position.y }));
+  yCandidates.forEach((y) => candidates.push({ x: position.x, y }));
+  xCandidates.forEach((x) => yCandidates.forEach((y) => candidates.push({ x, y })));
+
+  return candidates
+    .filter((candidate) => positionHasClearance(candidate, size, obstacles))
+    .sort((left, right) => {
+      const leftDistance = (left.x - position.x) ** 2 + (left.y - position.y) ** 2;
+      const rightDistance = (right.x - position.x) ** 2 + (right.y - position.y) ** 2;
+      return leftDistance - rightDistance
+        || Math.abs(left.y - position.y) - Math.abs(right.y - position.y)
+        || left.x - right.x
+        || left.y - right.y;
+    })[0] ?? position;
+}
+
+function withSpacingNodeClass(className: string | undefined, state: "invalid" | "snapping" | null) {
+  const classes = new Set((className ?? "").split(/\s+/).filter(Boolean));
+  classes.delete("spacing-invalid");
+  classes.delete("spacing-snapping");
+  if (state === "invalid") classes.add("spacing-invalid");
+  if (state === "snapping") classes.add("spacing-snapping");
+  return [...classes].join(" ") || undefined;
+}
+
+function nextOpenPosition(tasks: Task[], size: Size): Point {
+  const obstacles = tasks.map((task) => rectAt(task.position, task.size ?? automaticNodeSize(task.title)));
   for (let row = 0; row < 12; row += 1) {
     for (let column = 0; column < 4; column += 1) {
       const candidate = { x: 70 + column * 280, y: 70 + row * 115 };
-      const occupied = tasks.some(
-        (task) => Math.abs(task.position.x - candidate.x) < 240 && Math.abs(task.position.y - candidate.y) < 80,
-      );
-      if (!occupied) return candidate;
+      if (positionHasClearance(candidate, size, obstacles)) return candidate;
     }
   }
-  return { x: 70, y: 70 + tasks.length * 115 };
+  return nearestClearPosition({ x: 70, y: 70 + tasks.length * 115 }, size, obstacles);
 }
 
 function estimatedTextWidth(text: string) {
@@ -636,14 +696,69 @@ function simplifyRoutePoints(points: Point[]) {
   });
 }
 
-function preferredRoutePoints(source: Point, sourceStub: Point, targetStub: Point, target: Point, sourcePosition: Position) {
-  if (sourcePosition === Position.Left || sourcePosition === Position.Right) {
+function preferredRoutePoints(
+  source: Point,
+  sourceStub: Point,
+  targetStub: Point,
+  target: Point,
+  sourcePosition: Position,
+  targetPosition: Position,
+) {
+  const sourceIsHorizontal = sourcePosition === Position.Left || sourcePosition === Position.Right;
+  const targetIsHorizontal = targetPosition === Position.Left || targetPosition === Position.Right;
+  if (sourceIsHorizontal !== targetIsHorizontal) {
+    const direct = simplifyRoutePoints([
+      source,
+      sourceIsHorizontal
+        ? { x: target.x, y: source.y }
+        : { x: source.x, y: target.y },
+      target,
+    ]);
+    if (routeHonorsDockDirections(direct, sourcePosition, targetPosition)) return direct;
+    return simplifyRoutePoints([
+      source,
+      sourceStub,
+      sourceIsHorizontal
+        ? { x: targetStub.x, y: sourceStub.y }
+        : { x: sourceStub.x, y: targetStub.y },
+      targetStub,
+      target,
+    ]);
+  }
+
+  if (sourceIsHorizontal) {
+    if (sourcePosition === targetPosition) {
+      const outsideX = sourcePosition === Position.Left
+        ? Math.min(sourceStub.x, targetStub.x)
+        : Math.max(sourceStub.x, targetStub.x);
+      return simplifyRoutePoints([
+        source,
+        sourceStub,
+        { x: outsideX, y: sourceStub.y },
+        { x: outsideX, y: targetStub.y },
+        targetStub,
+        target,
+      ]);
+    }
     const middleX = (sourceStub.x + targetStub.x) / 2;
     return simplifyRoutePoints([
       source,
       sourceStub,
       { x: middleX, y: sourceStub.y },
       { x: middleX, y: targetStub.y },
+      targetStub,
+      target,
+    ]);
+  }
+  if (sourcePosition === targetPosition) {
+    const outsideY = sourcePosition === Position.Top
+      ? Math.min(sourceStub.y, targetStub.y)
+      : Math.max(sourceStub.y, targetStub.y);
+    return simplifyRoutePoints([
+      source,
+      sourceStub,
+      { x: sourceStub.x, y: outsideY },
+      { x: targetStub.x, y: outsideY },
       targetStub,
       target,
     ]);
@@ -657,6 +772,29 @@ function preferredRoutePoints(source: Point, sourceStub: Point, targetStub: Poin
     targetStub,
     target,
   ]);
+}
+
+function routeHonorsDockDirections(points: Point[], sourcePosition: Position, targetPosition: Position) {
+  const route = simplifyRoutePoints(points);
+  if (route.length < 2) return false;
+  const outwardVector = (position: Position): Point => {
+    if (position === Position.Left) return { x: -1, y: 0 };
+    if (position === Position.Right) return { x: 1, y: 0 };
+    if (position === Position.Top) return { x: 0, y: -1 };
+    return { x: 0, y: 1 };
+  };
+  const sourceDirection = {
+    x: route[1].x - route[0].x,
+    y: route[1].y - route[0].y,
+  };
+  const targetDirection = {
+    x: route.at(-1)!.x - route.at(-2)!.x,
+    y: route.at(-1)!.y - route.at(-2)!.y,
+  };
+  const sourceOutward = outwardVector(sourcePosition);
+  const targetOutward = outwardVector(targetPosition);
+  return sourceDirection.x * sourceOutward.x + sourceDirection.y * sourceOutward.y > 0.001
+    && targetDirection.x * targetOutward.x + targetDirection.y * targetOutward.y < -0.001;
 }
 
 function routeIsClear(points: Point[], obstacles: Rect[]) {
@@ -847,8 +985,20 @@ function dependencyRoute(
   targetPosition: Position,
   obstacleRects: Rect[],
 ): RouteResult {
-  const sourceStub = offsetPoint(source.x, source.y, sourcePosition, EDGE_ROUTE_STUB);
-  const targetStub = offsetPoint(target.x, target.y, targetPosition, EDGE_ROUTE_STUB);
+  const facingGap = sourcePosition === Position.Right && targetPosition === Position.Left
+    ? target.x - source.x
+    : sourcePosition === Position.Left && targetPosition === Position.Right
+      ? source.x - target.x
+      : sourcePosition === Position.Bottom && targetPosition === Position.Top
+        ? target.y - source.y
+        : sourcePosition === Position.Top && targetPosition === Position.Bottom
+          ? source.y - target.y
+          : null;
+  const stubLength = facingGap === null
+    ? EDGE_ROUTE_STUB
+    : Math.min(EDGE_ROUTE_STUB, Math.max(0, facingGap / 2));
+  const sourceStub = offsetPoint(source.x, source.y, sourcePosition, stubLength);
+  const targetStub = offsetPoint(target.x, target.y, targetPosition, stubLength);
   const obstacles = obstacleRects.map((obstacle) => {
     const availableClearance = Math.min(
       clearanceBeforePointEntersRect(source, obstacle),
@@ -856,14 +1006,17 @@ function dependencyRoute(
     );
     return inflateRect(obstacle, Math.min(EDGE_ROUTE_CLEARANCE, availableClearance));
   });
-  const preferred = preferredRoutePoints(source, sourceStub, targetStub, target, sourcePosition);
-  const routeStart = routeIsClear([source, sourceStub], obstacles) ? sourceStub : source;
-  const routeEnd = routeIsClear([targetStub, target], obstacles) ? targetStub : target;
+  const preferred = preferredRoutePoints(source, sourceStub, targetStub, target, sourcePosition, targetPosition);
+  const routeStart = sourceStub;
+  const routeEnd = targetStub;
   const detour = routeIsClear(preferred, obstacles)
     ? null
     : findObstacleRoute(routeStart, routeEnd, obstacles, sourcePosition, targetPosition);
-  const points = detour && routeIsClear([source, ...detour, target], obstacles)
-    ? simplifyRoutePoints([source, ...detour, target])
+  const detourPoints = detour ? simplifyRoutePoints([source, ...detour, target]) : null;
+  const points = detourPoints
+    && routeHonorsDockDirections(detourPoints, sourcePosition, targetPosition)
+    && routeIsClear(detourPoints, obstacles)
+    ? detourPoints
     : preferred;
   return { path: roundedRoutePath(points, EDGE_CORNER_RADIUS), label: routeMidpoint(points) };
 }
@@ -957,18 +1110,19 @@ function nodeDimensions(node: TaskFlowNode): Size {
 }
 
 function nodeRect(node: TaskFlowNode): Rect {
-  const size = nodeDimensions(node);
-  return {
-    left: node.position.x,
-    top: node.position.y,
-    right: node.position.x + size.width,
-    bottom: node.position.y + size.height,
-  };
+  return rectAt(node.position, nodeDimensions(node));
 }
 
-function facingHandles(source: TaskFlowNode, target: TaskFlowNode) {
+function facingHandles(
+  source: TaskFlowNode,
+  target: TaskFlowNode,
+  obstacleRects: Rect[],
+  previous?: { sourceSide: ConnectionSide; targetSide: ConnectionSide },
+) {
   const sourceSize = nodeDimensions(source);
   const targetSize = nodeDimensions(target);
+  const sourceRect = nodeRect(source);
+  const targetRect = nodeRect(target);
   const sourceCenter = {
     x: source.position.x + sourceSize.width / 2,
     y: source.position.y + sourceSize.height / 2,
@@ -978,18 +1132,111 @@ function facingHandles(source: TaskFlowNode, target: TaskFlowNode) {
     y: target.position.y + targetSize.height / 2,
   };
   const dx = targetCenter.x - sourceCenter.x;
-  const dy = targetCenter.y - sourceCenter.y;
-  const horizontalScore = Math.abs(dx) / Math.max(1, (sourceSize.width + targetSize.width) / 2);
-  const verticalScore = Math.abs(dy) / Math.max(1, (sourceSize.height + targetSize.height) / 2);
+  const positionForSide = (side: ConnectionSide) => {
+    if (side === "left") return Position.Left;
+    if (side === "right") return Position.Right;
+    if (side === "top") return Position.Top;
+    return Position.Bottom;
+  };
+  const pointForSide = (rect: Rect, side: ConnectionSide): Point => {
+    if (side === "left") return { x: rect.left - EDGE_HANDLE_OUTSET, y: (rect.top + rect.bottom) / 2 };
+    if (side === "right") return { x: rect.right + EDGE_HANDLE_OUTSET, y: (rect.top + rect.bottom) / 2 };
+    if (side === "top") return { x: (rect.left + rect.right) / 2, y: rect.top - EDGE_HANDLE_OUTSET };
+    return { x: (rect.left + rect.right) / 2, y: rect.bottom + EDGE_HANDLE_OUTSET };
+  };
 
-  if (horizontalScore > verticalScore) {
-    const sourceSide: ConnectionSide = dx >= 0 ? "right" : "left";
-    const targetSide: ConnectionSide = dx >= 0 ? "left" : "right";
-    return { sourceHandle: `source-${sourceSide}`, targetHandle: `target-${targetSide}`, sourceSide, targetSide };
+  const routeCandidate = (sourceSide: ConnectionSide, targetSide: ConnectionSide) => {
+    const sourcePosition = positionForSide(sourceSide);
+    const targetPosition = positionForSide(targetSide);
+    const sourcePoint = pointForSide(sourceRect, sourceSide);
+    const targetPoint = pointForSide(targetRect, targetSide);
+    const facingGap = sourcePosition === Position.Right && targetPosition === Position.Left
+      ? targetPoint.x - sourcePoint.x
+      : sourcePosition === Position.Left && targetPosition === Position.Right
+        ? sourcePoint.x - targetPoint.x
+        : sourcePosition === Position.Bottom && targetPosition === Position.Top
+          ? targetPoint.y - sourcePoint.y
+          : sourcePosition === Position.Top && targetPosition === Position.Bottom
+            ? sourcePoint.y - targetPoint.y
+            : null;
+    const stubLength = facingGap === null
+      ? EDGE_ROUTE_STUB
+      : Math.min(EDGE_ROUTE_STUB, Math.max(0, facingGap / 2));
+    const sourceStub = offsetPoint(sourcePoint.x, sourcePoint.y, sourcePosition, stubLength);
+    const targetStub = offsetPoint(targetPoint.x, targetPoint.y, targetPosition, stubLength);
+    const points = preferredRoutePoints(
+      sourcePoint,
+      sourceStub,
+      targetStub,
+      targetPoint,
+      sourcePosition,
+      targetPosition,
+    );
+    const routeObstacles = obstacleRects.map((obstacle) => {
+      const availableClearance = Math.min(
+        clearanceBeforePointEntersRect(sourcePoint, obstacle),
+        clearanceBeforePointEntersRect(targetPoint, obstacle),
+      );
+      return inflateRect(obstacle, Math.min(EDGE_ROUTE_CLEARANCE, availableClearance));
+    });
+    const endpointSegmentsAreClear = routeIsClear([sourcePoint, sourceStub], routeObstacles)
+      && routeIsClear([targetStub, targetPoint], routeObstacles);
+    const routeBlockers = [sourceRect, targetRect, ...routeObstacles];
+    const detour = routeIsClear(points, routeBlockers)
+      ? null
+      : findObstacleRoute(sourceStub, targetStub, routeBlockers, sourcePosition, targetPosition);
+    const routedPoints = detour ? simplifyRoutePoints([sourcePoint, ...detour, targetPoint]) : points;
+    const length = routedPoints.slice(1).reduce((total, point, index) => (
+      total + Math.abs(point.x - routedPoints[index].x) + Math.abs(point.y - routedPoints[index].y)
+    ), 0);
+    const departureLength = routedPoints.length > 1
+      ? Math.abs(routedPoints[1].x - routedPoints[0].x) + Math.abs(routedPoints[1].y - routedPoints[0].y)
+      : 0;
+    const arrivalLength = routedPoints.length > 1
+      ? Math.abs(routedPoints.at(-1)!.x - routedPoints.at(-2)!.x)
+        + Math.abs(routedPoints.at(-1)!.y - routedPoints.at(-2)!.y)
+      : 0;
+    return {
+      sourceSide,
+      targetSide,
+      clear: (facingGap === null || facingGap >= EDGE_MIN_APPROACH * 2)
+        && departureLength >= EDGE_MIN_APPROACH
+        && arrivalLength >= EDGE_MIN_APPROACH
+        && endpointSegmentsAreClear
+        && routeHonorsDockDirections(routedPoints, sourcePosition, targetPosition)
+        && routeIsClear(routedPoints, routeBlockers),
+      score: length + Math.max(0, routedPoints.length - 2) * EDGE_ROUTE_BEND_PENALTY,
+    };
+  };
+
+  const sides: ConnectionSide[] = ["top", "right", "bottom", "left"];
+  const candidates = sides
+    .flatMap((sourceSide) => sides.map((targetSide) => routeCandidate(sourceSide, targetSide)))
+    .filter((candidate) => candidate.clear)
+    .sort((left, right) => left.score - right.score
+      || left.sourceSide.localeCompare(right.sourceSide)
+      || left.targetSide.localeCompare(right.targetSide));
+  const best = candidates[0];
+  const previousCandidate = previous
+    ? candidates.find((candidate) => (
+      candidate.sourceSide === previous.sourceSide && candidate.targetSide === previous.targetSide
+    ))
+    : null;
+  const selected = previousCandidate && best
+    && previousCandidate.score <= best.score + EDGE_DOCK_SWITCH_THRESHOLD
+    ? previousCandidate
+    : best;
+  if (selected) {
+    return {
+      sourceHandle: `source-${selected.sourceSide}`,
+      targetHandle: `target-${selected.targetSide}`,
+      sourceSide: selected.sourceSide,
+      targetSide: selected.targetSide,
+    };
   }
 
-  const sourceSide: ConnectionSide = dy >= 0 ? "bottom" : "top";
-  const targetSide: ConnectionSide = dy >= 0 ? "top" : "bottom";
+  const sourceSide: ConnectionSide = dx >= 0 ? "left" : "right";
+  const targetSide = sourceSide;
   return { sourceHandle: `source-${sourceSide}`, targetHandle: `target-${targetSide}`, sourceSide, targetSide };
 }
 
@@ -1547,6 +1794,7 @@ export default function TaskApp() {
   const inspectorOpen = inspectedTaskId !== null;
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [invalidDragId, setInvalidDragId] = useState<string | null>(null);
   const [graphDraft, setGraphDraft] = useState<GraphDraft | null>(null);
   const [isArranging, setIsArranging] = useState(false);
   const [arrangedDirection, setArrangedDirection] = useState<LayoutDirection | null>(null);
@@ -1559,6 +1807,7 @@ export default function TaskApp() {
   const [settlingCompletedIds, setSettlingCompletedIds] = useState<Set<string>>(() => new Set());
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const positionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const spacingSnapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const arrangeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const completionTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const arrangeFrame = useRef<number | null>(null);
@@ -1730,6 +1979,7 @@ export default function TaskApp() {
     arrangementVersion.current += 1;
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
     if (positionSaveTimer.current) clearTimeout(positionSaveTimer.current);
+    if (spacingSnapTimer.current) clearTimeout(spacingSnapTimer.current);
     if (arrangeTimer.current) clearTimeout(arrangeTimer.current);
     if (arrangeFrame.current) cancelAnimationFrame(arrangeFrame.current);
     completionTimers.current.forEach((timer) => clearTimeout(timer));
@@ -1878,13 +2128,14 @@ export default function TaskApp() {
     if (!title) return;
     clearArrangement();
     updateData((current) => {
+      const size = automaticNodeSize(title);
       return {
         ...current,
         tasks: [...current.tasks, {
           id: uid(),
           title,
           completed: false,
-          position: nextOpenPosition(current.tasks),
+          position: nextOpenPosition(current.tasks, size),
         }],
       };
     });
@@ -1924,7 +2175,19 @@ export default function TaskApp() {
     };
     clearArrangement();
     setGraphDraft(null);
-    updateData((current) => ({ ...current, tasks: [...current.tasks, task] }));
+    updateData((current) => {
+      const size = automaticNodeSize(clean);
+      const obstacles = current.tasks.map((currentTask) => (
+        rectAt(currentTask.position, currentTask.size ?? automaticNodeSize(currentTask.title))
+      ));
+      return {
+        ...current,
+        tasks: [...current.tasks, {
+          ...task,
+          position: nearestClearPosition(task.position, size, obstacles),
+        }],
+      };
+    });
     setSelectedTaskId(task.id);
     setSelectedEdgeId(null);
   }, [clearArrangement, graphDraft, updateData]);
@@ -2009,12 +2272,30 @@ export default function TaskApp() {
     setSelectedEdgeId(null);
   }, [clearArrangement, updateData]);
 
+  const edgeHandleChoicesRef = useRef(new Map<string, { sourceSide: ConnectionSide; targetSide: ConnectionSide }>());
+
   const flowEdges = useMemo<DependencyFlowEdge[]>(() => {
     const nodesById = new Map(flowNodes.map((node) => [node.id, node]));
     const layouts = data.dependencies.map((edge) => {
       const sourceNode = nodesById.get(edge.source);
       const targetNode = nodesById.get(edge.target);
-      return { edge, sourceNode, targetNode, handles: sourceNode && targetNode ? facingHandles(sourceNode, targetNode) : null };
+      const obstacleRects = flowNodes
+        .filter((node) => node.id !== edge.source && node.id !== edge.target)
+        .map(nodeRect);
+      const handles = sourceNode && targetNode
+        ? facingHandles(sourceNode, targetNode, obstacleRects, edgeHandleChoicesRef.current.get(edge.id))
+        : null;
+      if (handles) edgeHandleChoicesRef.current.set(edge.id, handles);
+      return {
+        edge,
+        sourceNode,
+        targetNode,
+        handles,
+      };
+    });
+    const dependencyIds = new Set(data.dependencies.map((edge) => edge.id));
+    edgeHandleChoicesRef.current.forEach((_, edgeId) => {
+      if (!dependencyIds.has(edgeId)) edgeHandleChoicesRef.current.delete(edgeId);
     });
     type DockUse = {
       layout: (typeof layouts)[number];
@@ -2068,9 +2349,11 @@ export default function TaskApp() {
 
     return layouts.map(({ edge, handles }) => {
       const selected = edge.id === selectedEdgeId;
+      const spacingMuted = invalidDragId === edge.source || invalidDragId === edge.target;
       return {
         ...edge,
         ...(handles ? { sourceHandle: handles.sourceHandle, targetHandle: handles.targetHandle } : {}),
+        className: spacingMuted ? "is-spacing-muted" : undefined,
         selected,
         type: "dependency",
         reconnectable: selected,
@@ -2087,7 +2370,7 @@ export default function TaskApp() {
         interactionWidth: 26,
       };
     });
-  }, [data.dependencies, flowNodes, removeDependency, selectedEdgeId]);
+  }, [data.dependencies, flowNodes, invalidDragId, removeDependency, selectedEdgeId]);
 
   const flushNodeLayout = useCallback(() => {
     if (!pendingNodePositions.current.size && !pendingNodeSizes.current.size) return;
@@ -2119,28 +2402,68 @@ export default function TaskApp() {
   const handleFlowNodesChange = useCallback((changes: NodeChange<TaskFlowNode>[]) => {
     onFlowNodesChange(changes);
     let sizeChanged = false;
+    let dragSpacingState: { id: string; invalid: boolean } | null = null;
     changes.forEach((change) => {
       if (change.type === "position" && change.position && (change.dragging || pendingNodePositions.current.has(change.id))) {
         pendingNodePositions.current.set(change.id, change.position);
+      }
+      if (change.type === "position" && change.position && change.dragging) {
+        const movingNode = flowNodes.find((node) => node.id === change.id);
+        if (movingNode) {
+          const obstacles = flowNodes.filter((node) => node.id !== change.id).map(nodeRect);
+          dragSpacingState = {
+            id: change.id,
+            invalid: !positionHasClearance(change.position, nodeDimensions(movingNode), obstacles),
+          };
+        }
       }
       if (change.type === "dimensions" && change.dimensions && (change.resizing || pendingNodeSizes.current.has(change.id))) {
         pendingNodeSizes.current.set(change.id, change.dimensions);
         sizeChanged = true;
       }
     });
+    if (dragSpacingState) {
+      const { id, invalid } = dragSpacingState;
+      setInvalidDragId(invalid ? id : null);
+      setFlowNodes((nodes) => nodes.map((node) => ({
+        ...node,
+        className: withSpacingNodeClass(node.className, node.id === id && invalid ? "invalid" : null),
+      })));
+    }
     if (sizeChanged) {
       clearArrangement();
       if (positionSaveTimer.current) clearTimeout(positionSaveTimer.current);
       positionSaveTimer.current = setTimeout(flushNodeLayout, 140);
     }
-  }, [clearArrangement, flushNodeLayout, onFlowNodesChange]);
+  }, [clearArrangement, flowNodes, flushNodeLayout, onFlowNodesChange, setFlowNodes]);
 
   const finishNodeDrag = useCallback((node: TaskFlowNode) => {
+    const proposedPosition = pendingNodePositions.current.get(node.id) ?? node.position;
+    const size = pendingNodeSizes.current.get(node.id) ?? nodeDimensions(node);
+    const obstacles = flowNodes.filter((candidate) => candidate.id !== node.id).map(nodeRect);
+    const position = nearestClearPosition(proposedPosition, size, obstacles);
+    const snapped = position.x !== proposedPosition.x || position.y !== proposedPosition.y;
+    pendingNodePositions.current.set(node.id, position);
+    setInvalidDragId(null);
+    if (spacingSnapTimer.current) clearTimeout(spacingSnapTimer.current);
+    const snapDuration = snapped && !window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 180 : 0;
+    setFlowNodes((nodes) => nodes.map((candidate) => candidate.id === node.id ? {
+      ...candidate,
+      position,
+      className: withSpacingNodeClass(candidate.className, snapDuration ? "snapping" : null),
+    } : candidate));
+    if (snapDuration) {
+      spacingSnapTimer.current = setTimeout(() => {
+        spacingSnapTimer.current = null;
+        setFlowNodes((nodes) => nodes.map((candidate) => candidate.id === node.id ? {
+          ...candidate,
+          className: withSpacingNodeClass(candidate.className, null),
+        } : candidate));
+      }, snapDuration);
+    }
     if (arrangedDirection) {
       const layerIndex = arrangedLayerByTask.current.get(node.id);
       const guide = layerIndex === undefined ? undefined : layoutGuides[layerIndex];
-      const position = pendingNodePositions.current.get(node.id) ?? node.position;
-      const size = pendingNodeSizes.current.get(node.id) ?? nodeDimensions(node);
       const center = { x: position.x + size.width / 2, y: position.y + size.height / 2 };
       const remainsInAssignedLayer = guide ? (arrangedDirection === "vertical"
         ? center.y >= guide.y && center.y <= guide.y + guide.height
@@ -2148,7 +2471,7 @@ export default function TaskApp() {
       if (!remainsInAssignedLayer) clearArrangement();
     }
     flushNodeLayout();
-  }, [arrangedDirection, clearArrangement, flushNodeLayout, layoutGuides]);
+  }, [arrangedDirection, clearArrangement, flowNodes, flushNodeLayout, layoutGuides, setFlowNodes]);
 
   const arrangeGraph = useCallback((direction: LayoutDirection = layoutDirection) => {
     flushNodeLayout();
