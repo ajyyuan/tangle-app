@@ -118,19 +118,7 @@ const CONNECTION_SIDES: { side: ConnectionSide; position: Position }[] = [
   { side: "left", position: Position.Left },
 ];
 
-const SAMPLE_DATA: TaskData = {
-  tasks: [
-    { id: "update-resume", title: "Update resume", completed: false, position: { x: 50, y: 80 } },
-    { id: "remote-internships", title: "Find remote internships", completed: false, position: { x: 50, y: 210 } },
-    { id: "pittsburgh-internships", title: "Find Pittsburgh internships", completed: false, position: { x: 50, y: 340 } },
-    { id: "apply-internships", title: "Apply to internships", completed: false, position: { x: 410, y: 210 } },
-  ],
-  dependencies: [
-    { id: "update-resume--apply-internships", source: "update-resume", target: "apply-internships" },
-    { id: "remote-internships--apply-internships", source: "remote-internships", target: "apply-internships" },
-    { id: "pittsburgh-internships--apply-internships", source: "pittsburgh-internships", target: "apply-internships" },
-  ],
-};
+const EMPTY_DATA: TaskData = { tasks: [], dependencies: [] };
 
 function historyReducer(state: HistoryState, action: HistoryAction): HistoryState {
   if (action.type === "reset") return { past: [], present: action.data, future: [] };
@@ -1952,7 +1940,7 @@ export default function TaskApp() {
   const [tasksPaneOpen, setTasksPaneOpen] = useState(true);
   const [history, dispatchHistory] = useReducer(historyReducer, {
     past: [],
-    present: SAMPLE_DATA,
+    present: EMPTY_DATA,
     future: [],
   });
   const data = history.present;
@@ -2078,7 +2066,7 @@ export default function TaskApp() {
       const savedListOrder = window.localStorage.getItem(LIST_ORDER_KEY);
       if (savedListOrder === "manual" || savedListOrder === "up-next") setListOrder(savedListOrder);
     } catch {
-      // Keep the sample data if saved data is unavailable or malformed.
+      // Keep the empty first-run state if saved data is unavailable or malformed.
     }
     setHydrated(true);
   }, []);
@@ -3051,7 +3039,7 @@ export default function TaskApp() {
   );
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${hydrated ? "" : "is-hydrating"}`}>
       <header className="app-header">
         <div className="header-leading">
           <div className="brand" aria-label="Tangle home">

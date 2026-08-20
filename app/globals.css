@@ -113,6 +113,7 @@ button, input { font: inherit; }
 button { color: inherit; }
 
 .app-shell { min-height: 100vh; display: flex; flex-direction: column; }
+.app-shell.is-hydrating { visibility: hidden; }
 
 .app-header {
   height: 64px;
