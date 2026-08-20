@@ -593,13 +593,32 @@ function DraftTaskNode({ data }: { data: DraftTaskNodeData }) {
   useEffect(() => {
     const focusInput = () => {
       const input = inputRef.current;
-      if (!input) return;
-      input.focus();
+      if (!input || finished.current) return;
+      input.focus({ preventScroll: true });
       input.setSelectionRange(input.value.length, input.value.length);
     };
+
     focusInput();
-    const timer = window.setTimeout(focusInput, 0);
-    return () => window.clearTimeout(timer);
+    let frame = window.requestAnimationFrame(() => {
+      focusInput();
+      frame = window.requestAnimationFrame(focusInput);
+    });
+    const timer = window.setTimeout(() => {
+      const activeElement = document.activeElement;
+      const focusStayedInCanvas = activeElement instanceof Element
+        && activeElement.closest(".react-flow__pane");
+      if (
+        activeElement === document.body
+        || activeElement === document.documentElement
+        || activeElement === inputRef.current
+        || focusStayedInCanvas
+      ) focusInput();
+    }, 80);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
   }, []);
 
   const finish = (cancel = false) => {
