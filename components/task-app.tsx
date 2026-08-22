@@ -78,11 +78,11 @@ type DependencyEdgeData = {
 type DependencyFlowEdge = Edge<DependencyEdgeData, "dependency">;
 type ConnectionSide = "top" | "right" | "bottom" | "left";
 
-const STORAGE_KEY = "tangle-task-data-v1";
-const LAYOUT_DIRECTION_KEY = "tangle-layout-direction-v1";
-const APPEARANCE_KEY = "tangle-appearance-v1";
-const LIST_ORDER_KEY = "tangle-list-order-v1";
-const BACKUP_FORMAT = "tangle-backup";
+const STORAGE_KEY = "carpaccio-task-data-v1";
+const LAYOUT_DIRECTION_KEY = "carpaccio-layout-direction-v1";
+const APPEARANCE_KEY = "carpaccio-appearance-v1";
+const LIST_ORDER_KEY = "carpaccio-list-order-v1";
+const BACKUP_FORMAT = "carpaccio-backup";
 const BACKUP_VERSION = 1;
 const MAX_BACKUP_BYTES = 5 * 1024 * 1024;
 const COMPLETION_SETTLE_MS = 640;
@@ -1386,7 +1386,7 @@ function validatedSize(value: unknown): Size {
 
 function validatedBackup(value: unknown): TaskData {
   if (!isRecord(value) || value.format !== BACKUP_FORMAT) {
-    invalidBackup("That file isn’t a Tangle backup.");
+    invalidBackup("That file isn’t a Carpaccio backup.");
   }
   if (value.version !== BACKUP_VERSION) {
     invalidBackup("This backup uses an unsupported version.");
@@ -2608,7 +2608,7 @@ export default function TaskApp() {
     const url = URL.createObjectURL(new Blob([contents], { type: "application/json" }));
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `tangle-backup-${exportedAt.toISOString().slice(0, 10)}.json`;
+    anchor.download = `carpaccio-backup-${exportedAt.toISOString().slice(0, 10)}.json`;
     document.body.append(anchor);
     anchor.click();
     anchor.remove();
@@ -3030,14 +3030,14 @@ export default function TaskApp() {
           <p>Your tasks are stored only in this browser. They aren’t uploaded or synced.</p>
         </div>
         <div className="local-data-actions">
-          <button type="button" onClick={downloadBackup} aria-label="Download a Tangle backup">Back up</button>
-          <button type="button" onClick={() => backupInputRef.current?.click()} aria-label="Restore from a Tangle backup">Restore…</button>
+          <button type="button" onClick={downloadBackup} aria-label="Download a Carpaccio backup">Back up</button>
+          <button type="button" onClick={() => backupInputRef.current?.click()} aria-label="Restore from a Carpaccio backup">Restore…</button>
           <input
             ref={backupInputRef}
             type="file"
             accept="application/json,.json"
             onChange={chooseBackupFile}
-            aria-label="Choose a Tangle backup"
+            aria-label="Choose a Carpaccio backup"
             hidden
           />
         </div>
@@ -3061,9 +3061,9 @@ export default function TaskApp() {
     <main className={`app-shell ${hydrated ? "" : "is-hydrating"}`}>
       <header className="app-header">
         <div className="header-leading">
-          <div className="brand" aria-label="Tangle home">
+          <div className="brand" aria-label="Carpaccio home">
             <span className="brand-mark"><CheckIcon /></span>
-            <span>Tangle</span>
+            <span>Carpaccio</span>
           </div>
           {isDesktopWorkspace && (
             <button

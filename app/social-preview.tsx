@@ -51,7 +51,7 @@ export function SocialPreview() {
               <path d="m3.25 8.25 3 3 6.5-6.5" stroke="#ffffff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </div>
-          <span style={{ fontSize: 30, fontWeight: 700, letterSpacing: "-0.6px" }}>Tangle</span>
+          <span style={{ fontSize: 30, fontWeight: 700, letterSpacing: "-0.6px" }}>Carpaccio</span>
         </div>
         <div
           style={{

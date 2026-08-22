@@ -1,4 +1,4 @@
-# Tangle MVP Plan
+# Carpaccio MVP Plan
 
 ## Foundation
 

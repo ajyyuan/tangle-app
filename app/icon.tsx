@@ -1,7 +1,7 @@
 import { ImageResponse } from "next/og";
 import { IconMark } from "./icon-mark";
 
-export const alt = "Tangle";
+export const alt = "Carpaccio";
 export const size = { width: 64, height: 64 };
 export const contentType = "image/png";
 

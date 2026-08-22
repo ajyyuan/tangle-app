@@ -3,27 +3,30 @@ import "@xyflow/react/dist/style.css";
 import "./globals.css";
 
 const description = "A quiet personal task list with visual dependencies.";
-const productionHost = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+const siteUrl = "https://carpaccio.io";
 
 export const metadata: Metadata = {
-  metadataBase: new URL(productionHost ? `https://${productionHost}` : "http://localhost:3000"),
+  metadataBase: new URL(siteUrl),
   title: {
-    default: "Tangle",
-    template: "%s · Tangle",
+    default: "Carpaccio",
+    template: "%s · Carpaccio",
   },
   description,
-  applicationName: "Tangle",
+  applicationName: "Carpaccio",
   category: "productivity",
+  alternates: {
+    canonical: "/",
+  },
   openGraph: {
     type: "website",
     url: "/",
-    siteName: "Tangle",
-    title: "Tangle — Tasks, clearly connected",
+    siteName: "Carpaccio",
+    title: "Carpaccio — Tasks, clearly connected",
     description,
   },
   twitter: {
     card: "summary_large_image",
-    title: "Tangle — Tasks, clearly connected",
+    title: "Carpaccio — Tasks, clearly connected",
     description,
   },
 };
@@ -31,7 +34,7 @@ export const metadata: Metadata = {
 const appearanceScript = `
 (() => {
   try {
-    const saved = localStorage.getItem("tangle-appearance-v1");
+    const saved = localStorage.getItem("carpaccio-appearance-v1");
     const theme = saved === "light" || saved === "dark" ? saved : "system";
     const resolved = theme === "system"
       ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
