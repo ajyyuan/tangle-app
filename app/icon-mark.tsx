@@ -1,4 +1,4 @@
-export function IconMark({ apple = false }: { apple?: boolean }) {
+export function IconMark({ apple = false, color = "#d84b45" }: { apple?: boolean; color?: string }) {
   return (
     <div
       style={{
@@ -7,7 +7,7 @@ export function IconMark({ apple = false }: { apple?: boolean }) {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: apple ? "#d84b45" : "transparent",
+        background: apple ? color : "transparent",
       }}
     >
       <div
@@ -18,7 +18,7 @@ export function IconMark({ apple = false }: { apple?: boolean }) {
           alignItems: "center",
           justifyContent: "center",
           borderRadius: apple ? 0 : 999,
-          background: "#d84b45",
+          background: color,
         }}
       >
         <svg

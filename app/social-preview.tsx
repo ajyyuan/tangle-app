@@ -4,7 +4,7 @@ const cards = [
   { title: "Move forward", left: 20, top: 310 },
 ];
 
-export function SocialPreview() {
+export function SocialPreview({ brandColor = "#d84b45" }: { brandColor?: string }) {
   return (
     <div
       style={{
@@ -44,7 +44,7 @@ export function SocialPreview() {
               alignItems: "center",
               justifyContent: "center",
               borderRadius: 999,
-              background: "#d84b45",
+              background: brandColor,
             }}
           >
             <svg width="34" height="34" viewBox="0 0 16 16" fill="none">
