@@ -17,6 +17,7 @@
   --disabled: #bfc0c3;
   --border: #e5e5e3;
   --border-strong: #dedfdf;
+  --brand: #d84b45;
   --blue: #3478f6;
   --blue-soft: #edf4ff;
   --blue-ring: rgba(52,120,246,.18);
@@ -67,6 +68,7 @@ html[data-resolved-theme="dark"] {
   --disabled: #555952;
   --border: #30322e;
   --border-strong: #3b3d38;
+  --brand: #df5a53;
   --blue: #679cff;
   --blue-soft: rgba(103,156,255,.13);
   --blue-ring: rgba(103,156,255,.22);
@@ -130,7 +132,7 @@ button { color: inherit; }
 
 .header-leading { justify-self: start; display: flex; align-items: center; gap: 13px; }
 .brand { display: inline-flex; align-items: center; gap: 9px; font-size: 15px; font-weight: 620; letter-spacing: -0.01em; width: max-content; }
-.brand-mark { width: 22px; height: 22px; display: grid; place-items: center; background: var(--blue); color: var(--white); border-radius: 50%; }
+.brand-mark { width: 22px; height: 22px; display: grid; place-items: center; background: var(--brand); color: var(--white); border-radius: 50%; }
 .brand-mark svg { width: 14px; height: 14px; }
 
 .tasks-pane-toggle { width: 30px; height: 30px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; transition: color 120ms ease, background 120ms ease; }

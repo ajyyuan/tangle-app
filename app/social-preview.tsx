@@ -44,7 +44,7 @@ export function SocialPreview() {
               alignItems: "center",
               justifyContent: "center",
               borderRadius: 999,
-              background: "#3478f6",
+              background: "#d84b45",
             }}
           >
             <svg width="34" height="34" viewBox="0 0 16 16" fill="none">
