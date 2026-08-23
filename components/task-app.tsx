@@ -509,13 +509,13 @@ function InlineTitle({
   completed,
   onSave,
   className = "",
-  editable = true,
+  activation = "click",
 }: {
   title: string;
   completed: boolean;
   onSave: (title: string) => void;
   className?: string;
-  editable?: boolean;
+  activation?: "click" | "double-click";
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title);
@@ -540,14 +540,6 @@ function InlineTitle({
     if (restoreFocus) restoreTitleFocus();
   };
 
-  if (!editable) {
-    return (
-      <span className={`inline-title is-static ${completed ? "is-completed" : ""} ${className}`}>
-        {title}
-      </span>
-    );
-  }
-
   if (editing) {
     return (
       <input
@@ -556,6 +548,8 @@ function InlineTitle({
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={() => commit()}
+        onClick={(event) => event.stopPropagation()}
+        onDoubleClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
           if (event.key === "Enter") commit(true);
           if (event.key === "Escape") {
@@ -575,10 +569,18 @@ function InlineTitle({
       type="button"
       className={`inline-title nodrag nopan ${completed ? "is-completed" : ""} ${className}`}
       onClick={(event) => {
-        event.stopPropagation();
-        setEditing(true);
+        if (activation === "click") {
+          event.stopPropagation();
+          setEditing(true);
+        }
       }}
-      title="Edit task"
+      onDoubleClick={(event) => {
+        if (activation === "double-click") {
+          event.stopPropagation();
+          setEditing(true);
+        }
+      }}
+      title={activation === "double-click" ? "Double-click to edit task" : "Edit task"}
     >
       {title}
     </button>
@@ -688,7 +690,7 @@ function TaskNode({ id, data, width }: NodeProps<TaskFlowNode>) {
           onClick={() => data.onToggle(id)}
           label={data.completed ? `Mark ${data.title} incomplete` : `Complete ${data.title}`}
         />
-        <InlineTitle title={data.title} completed={data.completed} onSave={(title) => data.onRename(id, title)} className="node-title" editable={false} />
+        <InlineTitle title={data.title} completed={data.completed} onSave={(title) => data.onRename(id, title)} className="node-title" activation="double-click" />
       </div>
       {CONNECTION_SIDES.map(({ side, position }) => (
         <Handle
@@ -3177,7 +3179,7 @@ export default function TaskApp() {
                 }}
                 onNodeDoubleClick={(event, node) => {
                   if (node.data.draft) return;
-                  if (event.target instanceof Element && event.target.closest(".check-button, .react-flow__handle")) return;
+                  if (event.target instanceof Element && event.target.closest(".check-button, .inline-title, .inline-title-input, .react-flow__handle")) return;
                   event.stopPropagation();
                   setSelectedTaskId(node.id);
                   setSelectedEdgeId(null);
