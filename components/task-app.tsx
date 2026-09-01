@@ -110,6 +110,7 @@ const LAYOUT_START_Y = 72;
 const LAYOUT_LAYER_GAP = 110;
 const LAYOUT_SIBLING_GAP = NODE_MIN_CLEARANCE;
 const LAYOUT_GUIDE_EXTENT = 50_000;
+const AUTOMATIC_FIT_MIN_ZOOM = 0.7;
 const DESKTOP_WORKSPACE_QUERY = "(min-width: 1180px)";
 const CONNECTION_SIDES: { side: ConnectionSide; position: Position }[] = [
   { side: "top", position: Position.Top },
@@ -2157,7 +2158,7 @@ export default function TaskApp() {
   useEffect(() => {
     if ((!isDesktopWorkspace && view !== "graph") || !flowInstance.current) return;
     const timer = setTimeout(() => {
-      void flowInstance.current?.fitView({ padding: 0.14, maxZoom: 1.15, duration: 180 });
+      void flowInstance.current?.fitView({ padding: 0.14, minZoom: AUTOMATIC_FIT_MIN_ZOOM, maxZoom: 1.15, duration: 180 });
     }, 80);
     return () => clearTimeout(timer);
   }, [inspectorOpen, isDesktopWorkspace, view]);
@@ -2780,7 +2781,7 @@ export default function TaskApp() {
       arrangeTimer.current = setTimeout(() => {
         arrangeTimer.current = null;
         void (async () => {
-          await flowInstance.current?.fitView({ padding: 0.14, maxZoom: 1.15, duration: 320 });
+          await flowInstance.current?.fitView({ padding: 0.14, minZoom: AUTOMATIC_FIT_MIN_ZOOM, maxZoom: 1.15, duration: 320 });
           if (arrangementVersion.current !== version) return;
           const nodesById = new Map(flowInstance.current?.getNodes().map((node) => [node.id, node]) ?? []);
           const settledTasks = data.tasks.map((task) => {
@@ -3205,7 +3206,7 @@ export default function TaskApp() {
                 deleteKeyCode={null}
                 zoomOnDoubleClick={false}
                 fitView
-                fitViewOptions={{ padding: 0.14, maxZoom: 1.15 }}
+                fitViewOptions={{ padding: 0.14, minZoom: AUTOMATIC_FIT_MIN_ZOOM, maxZoom: 1.15 }}
                 minZoom={0.35}
                 maxZoom={1.8}
                 nodesConnectable
