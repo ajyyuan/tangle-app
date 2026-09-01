@@ -2243,6 +2243,7 @@ export default function TaskApp() {
   const toggleTask = useCallback((id: string) => {
     const task = data.tasks.find((candidate) => candidate.id === id);
     if (!task) return;
+    clearArrangement();
 
     const existingTimer = completionTimers.current.get(id);
     if (existingTimer) clearTimeout(existingTimer);
@@ -2270,11 +2271,27 @@ export default function TaskApp() {
       completionTimers.current.set(id, timer);
     }
 
-    updateData((current) => ({
-      ...current,
-      tasks: current.tasks.map((task) => task.id === id ? { ...task, completed: !task.completed } : task),
-    }));
-  }, [data.tasks, updateData]);
+    updateData((current) => {
+      const currentTask = current.tasks.find((candidate) => candidate.id === id);
+      if (!currentTask) return current;
+      if (!currentTask.completed) {
+        return {
+          ...current,
+          tasks: current.tasks.map((candidate) => candidate.id === id ? { ...candidate, completed: true } : candidate),
+        };
+      }
+
+      const size = currentTask.size ?? automaticNodeSize(currentTask.title);
+      const obstacles = current.tasks
+        .filter((candidate) => !candidate.completed && candidate.id !== id)
+        .map((candidate) => rectAt(candidate.position, candidate.size ?? automaticNodeSize(candidate.title)));
+      const position = nearestClearPosition(currentTask.position, size, obstacles);
+      return {
+        ...current,
+        tasks: current.tasks.map((candidate) => candidate.id === id ? { ...candidate, completed: false, position } : candidate),
+      };
+    });
+  }, [clearArrangement, data.tasks, updateData]);
 
   const renameTask = useCallback((id: string, title: string) => {
     clearArrangement();
@@ -2401,21 +2418,23 @@ export default function TaskApp() {
   }, [updateData]);
 
   const taskNodes = useMemo<TaskFlowNode[]>(() => {
-    const nodes: TaskFlowNode[] = data.tasks.map((task) => ({
-      id: task.id,
-      type: "task",
-      selected: task.id === selectedTaskId,
-      position: task.position,
-      style: task.size ?? automaticNodeSize(task.title),
-      data: {
-        draft: false,
-        title: task.title,
-        completed: task.completed,
-        blocked: blockedIds.has(task.id),
-        onToggle: toggleTask,
-        onRename: renameTask,
-      },
-    }));
+    const nodes: TaskFlowNode[] = data.tasks
+      .filter((task) => !task.completed || settlingCompletedIds.has(task.id))
+      .map((task) => ({
+        id: task.id,
+        type: "task",
+        selected: task.id === selectedTaskId,
+        position: task.position,
+        style: task.size ?? automaticNodeSize(task.title),
+        data: {
+          draft: false,
+          title: task.title,
+          completed: task.completed,
+          blocked: blockedIds.has(task.id),
+          onToggle: toggleTask,
+          onRename: renameTask,
+        },
+      }));
 
     if (graphDraft) {
       nodes.push({
@@ -2442,7 +2461,7 @@ export default function TaskApp() {
     }
 
     return nodes;
-  }, [blockedIds, cancelGraphTask, commitGraphTask, data.tasks, graphDraft, renameTask, selectedTaskId, toggleTask]);
+  }, [blockedIds, cancelGraphTask, commitGraphTask, data.tasks, graphDraft, renameTask, selectedTaskId, settlingCompletedIds, toggleTask]);
 
   const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<TaskFlowNode>(taskNodes);
 
@@ -2535,7 +2554,7 @@ export default function TaskApp() {
       });
     });
 
-    return layouts.map(({ edge, handles }) => {
+    return layouts.filter(({ sourceNode, targetNode }) => sourceNode && targetNode).map(({ edge, handles }) => {
       const selected = edge.id === selectedEdgeId;
       const spacingMuted = invalidDragId === edge.source || invalidDragId === edge.target;
       return {
@@ -2775,8 +2794,18 @@ export default function TaskApp() {
     arrangeFrame.current = requestAnimationFrame(() => {
       arrangeFrame.current = null;
       updateData((current) => {
-        const tasks = arrangeTasks(current.tasks, current.dependencies, direction);
-        return tasks === current.tasks ? current : { ...current, tasks };
+        const visibleTasks = current.tasks.filter((task) => !task.completed);
+        const visibleTaskIds = new Set(visibleTasks.map((task) => task.id));
+        const visibleDependencies = current.dependencies.filter((dependency) => (
+          visibleTaskIds.has(dependency.source) && visibleTaskIds.has(dependency.target)
+        ));
+        const arrangedTasks = arrangeTasks(visibleTasks, visibleDependencies, direction);
+        if (arrangedTasks === visibleTasks) return current;
+        const arrangedTasksById = new Map(arrangedTasks.map((task) => [task.id, task]));
+        return {
+          ...current,
+          tasks: current.tasks.map((task) => arrangedTasksById.get(task.id) ?? task),
+        };
       });
       arrangeTimer.current = setTimeout(() => {
         arrangeTimer.current = null;
@@ -2784,14 +2813,18 @@ export default function TaskApp() {
           await flowInstance.current?.fitView({ padding: 0.14, minZoom: AUTOMATIC_FIT_MIN_ZOOM, maxZoom: 1.15, duration: 320 });
           if (arrangementVersion.current !== version) return;
           const nodesById = new Map(flowInstance.current?.getNodes().map((node) => [node.id, node]) ?? []);
-          const settledTasks = data.tasks.map((task) => {
+          const settledTasks = data.tasks.filter((task) => !task.completed).map((task) => {
             const node = nodesById.get(task.id);
             return node ? { ...task, position: node.position, size: nodeDimensions(node) } : task;
           });
+          const settledTaskIds = new Set(settledTasks.map((task) => task.id));
+          const visibleDependencies = data.dependencies.filter((dependency) => (
+            settledTaskIds.has(dependency.source) && settledTaskIds.has(dependency.target)
+          ));
           const snapshot = {
             direction,
-            guides: arrangementGuides(settledTasks, data.dependencies, direction),
-            layerByTask: layerMembership(settledTasks, data.dependencies),
+            guides: arrangementGuides(settledTasks, visibleDependencies, direction),
+            layerByTask: layerMembership(settledTasks, visibleDependencies),
           };
           activeArrangement.current = cloneArrangement(snapshot);
           setLayoutGuides(snapshot.guides);
@@ -2908,6 +2941,7 @@ export default function TaskApp() {
   const canUndo = history.past.length > 0;
   const canRedo = history.future.length > 0;
   const inspectedTask = data.tasks.find((task) => task.id === inspectedTaskId) ?? null;
+  const hasVisibleGraphTasks = data.tasks.some((task) => !task.completed) || settlingCompletedIds.size > 0;
   const closeInspector = useCallback(() => {
     setInspectedTaskId(null);
     setSelectedTaskId(null);
@@ -3238,12 +3272,12 @@ export default function TaskApp() {
                 <Background color="var(--grid)" gap={24} size={1} />
                 <Controls showInteractive={false} position="bottom-left" />
             </ReactFlow>
-            {!data.tasks.length && !graphDraft && (
+            {!hasVisibleGraphTasks && !graphDraft && (
               <div className="graph-empty" aria-hidden="true">
-                <p>Double-click anywhere to add a task.</p>
+                <p>{data.tasks.length ? "All tasks complete." : "Double-click anywhere to add a task."}</p>
               </div>
             )}
-            {!!data.tasks.length && (
+            {hasVisibleGraphTasks && (
               <div className="graph-actions" ref={arrangementOptionsRef}>
                 <div className="arrange-control">
                   <button
@@ -3289,7 +3323,7 @@ export default function TaskApp() {
                 )}
               </div>
             )}
-            {!!data.tasks.length && (
+            {hasVisibleGraphTasks && (
               <div className="graph-help">Double-click tasks for details · Double-click space to add · Hover to connect</div>
             )}
           </div>
