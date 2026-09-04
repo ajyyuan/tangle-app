@@ -82,6 +82,7 @@ const STORAGE_KEY = "carpaccio-task-data-v1";
 const LAYOUT_DIRECTION_KEY = "carpaccio-layout-direction-v1";
 const APPEARANCE_KEY = "carpaccio-appearance-v1";
 const LIST_ORDER_KEY = "carpaccio-list-order-v1";
+const SHOW_COMPLETED_GRAPH_KEY = "carpaccio-show-completed-graph-v1";
 const BACKUP_FORMAT = "carpaccio-backup";
 const BACKUP_VERSION = 1;
 const MAX_BACKUP_BYTES = 5 * 1024 * 1024;
@@ -1474,6 +1475,8 @@ function ListView({
   settlingCompletedIds,
   completedTasksOpen,
   onCompletedTasksOpenChange,
+  showCompletedOnGraph,
+  onShowCompletedOnGraphChange,
   onToggle,
   onRename,
   onInspect,
@@ -1491,6 +1494,8 @@ function ListView({
   settlingCompletedIds: Set<string>;
   completedTasksOpen: boolean;
   onCompletedTasksOpenChange: (open: boolean) => void;
+  showCompletedOnGraph: boolean;
+  onShowCompletedOnGraphChange: (show: boolean) => void;
   onToggle: (id: string) => void;
   onRename: (id: string, title: string) => void;
   onInspect: (id: string) => void;
@@ -1672,16 +1677,12 @@ function ListView({
       className="task-list-keyboard-scope"
       role="group"
       aria-label="Task list"
-      tabIndex={0}
+      tabIndex={selectedTaskId ? -1 : 0}
       onKeyDown={handleListKeyDown}
-      onFocus={(event) => {
-        if (event.target !== event.currentTarget) return;
-        const rows = visibleTaskRows();
-        const row = rows.find((candidate) => candidate.dataset.taskId === selectedTaskId) ?? rows[0];
-        const id = row?.dataset.taskId;
-        if (!row || !id) return;
-        onSelect(id);
-        window.requestAnimationFrame(() => row.focus({ preventScroll: true }));
+      onPointerDown={(event) => {
+        const target = event.target as HTMLElement;
+        if (target.closest(".task-row, button, input, textarea, [contenteditable='true']")) return;
+        onClearSelection();
       }}
     >
       <div className="task-list" role="list" aria-label="Incomplete tasks">
@@ -1710,9 +1711,19 @@ function ListView({
             <span>{completedTasks.length}</span>
           </button>
           {completedTasksOpen && (
-            <div id="completed-task-list" className="completed-task-list" role="list">
-              {completedTasks.map((task) => renderTaskRow(task, false))}
-            </div>
+            <>
+              <label className="completed-graph-option">
+                <input
+                  type="checkbox"
+                  checked={showCompletedOnGraph}
+                  onChange={(event) => onShowCompletedOnGraphChange(event.currentTarget.checked)}
+                />
+                <span>Show on graph</span>
+              </label>
+              <div id="completed-task-list" className="completed-task-list" role="list">
+                {completedTasks.map((task) => renderTaskRow(task, false))}
+              </div>
+            </>
           )}
         </section>
       )}
@@ -1983,6 +1994,7 @@ export default function TaskApp() {
   const [appearance, setAppearance] = useState<Appearance>("system");
   const [appearanceOptionsOpen, setAppearanceOptionsOpen] = useState(false);
   const [listOrder, setListOrder] = useState<ListOrder>("manual");
+  const [showCompletedOnGraph, setShowCompletedOnGraph] = useState(false);
   const [completedTasksOpen, setCompletedTasksOpen] = useState(false);
   const [pendingImport, setPendingImport] = useState<PendingImport | null>(null);
   const [settlingCompletedIds, setSettlingCompletedIds] = useState<Set<string>>(() => new Set());
@@ -2087,6 +2099,10 @@ export default function TaskApp() {
       }
       const savedListOrder = window.localStorage.getItem(LIST_ORDER_KEY);
       if (savedListOrder === "manual" || savedListOrder === "up-next") setListOrder(savedListOrder);
+      const savedShowCompleted = window.localStorage.getItem(SHOW_COMPLETED_GRAPH_KEY);
+      if (savedShowCompleted === "true" || savedShowCompleted === "false") {
+        setShowCompletedOnGraph(savedShowCompleted === "true");
+      }
     } catch {
       // Keep the empty first-run state if saved data is unavailable or malformed.
     }
@@ -2104,6 +2120,10 @@ export default function TaskApp() {
   useEffect(() => {
     if (hydrated) window.localStorage.setItem(LIST_ORDER_KEY, listOrder);
   }, [hydrated, listOrder]);
+
+  useEffect(() => {
+    if (hydrated) window.localStorage.setItem(SHOW_COMPLETED_GRAPH_KEY, String(showCompletedOnGraph));
+  }, [hydrated, showCompletedOnGraph]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -2243,7 +2263,7 @@ export default function TaskApp() {
   const toggleTask = useCallback((id: string) => {
     const task = data.tasks.find((candidate) => candidate.id === id);
     if (!task) return;
-    clearArrangement();
+    if (!showCompletedOnGraph) clearArrangement();
 
     const existingTimer = completionTimers.current.get(id);
     if (existingTimer) clearTimeout(existingTimer);
@@ -2280,6 +2300,12 @@ export default function TaskApp() {
           tasks: current.tasks.map((candidate) => candidate.id === id ? { ...candidate, completed: true } : candidate),
         };
       }
+      if (showCompletedOnGraph) {
+        return {
+          ...current,
+          tasks: current.tasks.map((candidate) => candidate.id === id ? { ...candidate, completed: false } : candidate),
+        };
+      }
 
       const size = currentTask.size ?? automaticNodeSize(currentTask.title);
       const obstacles = current.tasks
@@ -2291,7 +2317,7 @@ export default function TaskApp() {
         tasks: current.tasks.map((candidate) => candidate.id === id ? { ...candidate, completed: false, position } : candidate),
       };
     });
-  }, [clearArrangement, data.tasks, updateData]);
+  }, [clearArrangement, data.tasks, showCompletedOnGraph, updateData]);
 
   const renameTask = useCallback((id: string, title: string) => {
     clearArrangement();
@@ -2419,7 +2445,7 @@ export default function TaskApp() {
 
   const taskNodes = useMemo<TaskFlowNode[]>(() => {
     const nodes: TaskFlowNode[] = data.tasks
-      .filter((task) => !task.completed || settlingCompletedIds.has(task.id))
+      .filter((task) => showCompletedOnGraph || !task.completed || settlingCompletedIds.has(task.id))
       .map((task) => ({
         id: task.id,
         type: "task",
@@ -2461,7 +2487,7 @@ export default function TaskApp() {
     }
 
     return nodes;
-  }, [blockedIds, cancelGraphTask, commitGraphTask, data.tasks, graphDraft, renameTask, selectedTaskId, settlingCompletedIds, toggleTask]);
+  }, [blockedIds, cancelGraphTask, commitGraphTask, data.tasks, graphDraft, renameTask, selectedTaskId, settlingCompletedIds, showCompletedOnGraph, toggleTask]);
 
   const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<TaskFlowNode>(taskNodes);
 
@@ -2794,7 +2820,7 @@ export default function TaskApp() {
     arrangeFrame.current = requestAnimationFrame(() => {
       arrangeFrame.current = null;
       updateData((current) => {
-        const visibleTasks = current.tasks.filter((task) => !task.completed);
+        const visibleTasks = current.tasks.filter((task) => showCompletedOnGraph || !task.completed);
         const visibleTaskIds = new Set(visibleTasks.map((task) => task.id));
         const visibleDependencies = current.dependencies.filter((dependency) => (
           visibleTaskIds.has(dependency.source) && visibleTaskIds.has(dependency.target)
@@ -2813,7 +2839,7 @@ export default function TaskApp() {
           await flowInstance.current?.fitView({ padding: 0.14, minZoom: AUTOMATIC_FIT_MIN_ZOOM, maxZoom: 1.15, duration: 320 });
           if (arrangementVersion.current !== version) return;
           const nodesById = new Map(flowInstance.current?.getNodes().map((node) => [node.id, node]) ?? []);
-          const settledTasks = data.tasks.filter((task) => !task.completed).map((task) => {
+          const settledTasks = data.tasks.filter((task) => showCompletedOnGraph || !task.completed).map((task) => {
             const node = nodesById.get(task.id);
             return node ? { ...task, position: node.position, size: nodeDimensions(node) } : task;
           });
@@ -2834,12 +2860,18 @@ export default function TaskApp() {
         })();
       }, 360);
     });
-  }, [arrangedDirection, data.dependencies, data.tasks, flushNodeLayout, layoutDirection, layoutGuides.length, updateData]);
+  }, [arrangedDirection, data.dependencies, data.tasks, flushNodeLayout, layoutDirection, layoutGuides.length, showCompletedOnGraph, updateData]);
 
   const chooseLayoutDirection = useCallback((direction: LayoutDirection) => {
     setLayoutDirection(direction);
     setArrangementOptionsOpen(false);
   }, []);
+
+  const changeCompletedGraphVisibility = useCallback((showCompleted: boolean) => {
+    flushNodeLayout();
+    clearArrangement();
+    setShowCompletedOnGraph(showCompleted);
+  }, [clearArrangement, flushNodeLayout]);
 
   const addDependency = useCallback((source: string, target: string) => {
     const issue = dependencyIssue(source, target, data.dependencies);
@@ -2941,7 +2973,7 @@ export default function TaskApp() {
   const canUndo = history.past.length > 0;
   const canRedo = history.future.length > 0;
   const inspectedTask = data.tasks.find((task) => task.id === inspectedTaskId) ?? null;
-  const hasVisibleGraphTasks = data.tasks.some((task) => !task.completed) || settlingCompletedIds.size > 0;
+  const hasVisibleGraphTasks = data.tasks.some((task) => showCompletedOnGraph || !task.completed) || settlingCompletedIds.size > 0;
   const closeInspector = useCallback(() => {
     setInspectedTaskId(null);
     setSelectedTaskId(null);
@@ -3045,6 +3077,8 @@ export default function TaskApp() {
         settlingCompletedIds={settlingCompletedIds}
         completedTasksOpen={completedTasksOpen}
         onCompletedTasksOpenChange={setCompletedTasksOpen}
+        showCompletedOnGraph={showCompletedOnGraph}
+        onShowCompletedOnGraphChange={changeCompletedGraphVisibility}
         onToggle={toggleTask}
         onRename={renameTask}
         onInspect={setInspectedTaskId}

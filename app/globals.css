@@ -251,6 +251,9 @@ button { color: inherit; }
 .completed-toggle svg { width: 14px; height: 14px; margin-right: 2px; transition: transform 140ms ease; }
 .completed-section.is-open .completed-toggle svg { transform: rotate(90deg); }
 .completed-task-list { border-top: 1px solid var(--border); animation: connection-tool-in 140ms ease-out; }
+.completed-graph-option { min-height: 38px; padding: 0 12px 0 34px; display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; cursor: pointer; }
+.completed-graph-option:hover { background: var(--surface-hover); color: var(--text-secondary); }
+.completed-graph-option input { width: 14px; height: 14px; margin: 0; accent-color: var(--blue); cursor: pointer; }
 
 .local-data { margin: 24px 8px 0; }
 .local-data-note { display: flex; align-items: flex-start; gap: 7px; color: var(--muted); }
