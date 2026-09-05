@@ -1989,7 +1989,7 @@ export default function TaskApp() {
   const [isArranging, setIsArranging] = useState(false);
   const [arrangedDirection, setArrangedDirection] = useState<LayoutDirection | null>(null);
   const [layoutGuides, setLayoutGuides] = useState<LayoutGuide[]>([]);
-  const [layoutDirection, setLayoutDirection] = useState<LayoutDirection>("vertical");
+  const [layoutDirection, setLayoutDirection] = useState<LayoutDirection>("horizontal");
   const [arrangementOptionsOpen, setArrangementOptionsOpen] = useState(false);
   const [appearance, setAppearance] = useState<Appearance>("system");
   const [appearanceOptionsOpen, setAppearanceOptionsOpen] = useState(false);
