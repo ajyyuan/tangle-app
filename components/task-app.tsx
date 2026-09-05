@@ -1351,6 +1351,43 @@ function hasPath(from: string, to: string, dependencies: Dependency[], ignoredEd
   return false;
 }
 
+function dependencyChainTaskIds(selectedTaskId: string | null, visibleTaskIds: Set<string>, dependencies: Dependency[]) {
+  if (!selectedTaskId || !visibleTaskIds.has(selectedTaskId)) return null;
+
+  const upstream = new Set([selectedTaskId]);
+  const downstream = new Set([selectedTaskId]);
+  const upstreamQueue = [selectedTaskId];
+  const downstreamQueue = [selectedTaskId];
+
+  while (upstreamQueue.length) {
+    const currentId = upstreamQueue.shift()!;
+    dependencies.forEach((dependency) => {
+      if (
+        dependency.target !== currentId
+        || !visibleTaskIds.has(dependency.source)
+        || upstream.has(dependency.source)
+      ) return;
+      upstream.add(dependency.source);
+      upstreamQueue.push(dependency.source);
+    });
+  }
+
+  while (downstreamQueue.length) {
+    const currentId = downstreamQueue.shift()!;
+    dependencies.forEach((dependency) => {
+      if (
+        dependency.source !== currentId
+        || !visibleTaskIds.has(dependency.target)
+        || downstream.has(dependency.target)
+      ) return;
+      downstream.add(dependency.target);
+      downstreamQueue.push(dependency.target);
+    });
+  }
+
+  return new Set([...upstream, ...downstream]);
+}
+
 function minimalDependencies(dependencies: Dependency[]) {
   const seenPairs = new Set<string>();
   const uniqueDependencies = dependencies.filter((edge) => {
@@ -2443,9 +2480,20 @@ export default function TaskApp() {
     });
   }, [updateData]);
 
+  const visibleGraphTaskIds = useMemo(() => new Set(
+    data.tasks
+      .filter((task) => showCompletedOnGraph || !task.completed || settlingCompletedIds.has(task.id))
+      .map((task) => task.id),
+  ), [data.tasks, settlingCompletedIds, showCompletedOnGraph]);
+
+  const selectedTaskChainIds = useMemo(
+    () => dependencyChainTaskIds(selectedTaskId, visibleGraphTaskIds, data.dependencies),
+    [data.dependencies, selectedTaskId, visibleGraphTaskIds],
+  );
+
   const taskNodes = useMemo<TaskFlowNode[]>(() => {
     const nodes: TaskFlowNode[] = data.tasks
-      .filter((task) => showCompletedOnGraph || !task.completed || settlingCompletedIds.has(task.id))
+      .filter((task) => visibleGraphTaskIds.has(task.id))
       .map((task) => ({
         id: task.id,
         type: "task",
@@ -2487,7 +2535,7 @@ export default function TaskApp() {
     }
 
     return nodes;
-  }, [blockedIds, cancelGraphTask, commitGraphTask, data.tasks, graphDraft, renameTask, selectedTaskId, settlingCompletedIds, showCompletedOnGraph, toggleTask]);
+  }, [blockedIds, cancelGraphTask, commitGraphTask, data.tasks, graphDraft, renameTask, selectedTaskId, toggleTask, visibleGraphTaskIds]);
 
   const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<TaskFlowNode>(taskNodes);
 
@@ -2583,10 +2631,18 @@ export default function TaskApp() {
     return layouts.filter(({ sourceNode, targetNode }) => sourceNode && targetNode).map(({ edge, handles }) => {
       const selected = edge.id === selectedEdgeId;
       const spacingMuted = invalidDragId === edge.source || invalidDragId === edge.target;
+      const chainMuted = Boolean(
+        selectedTaskChainIds
+        && (!selectedTaskChainIds.has(edge.source) || !selectedTaskChainIds.has(edge.target)),
+      );
+      const className = [
+        spacingMuted ? "is-spacing-muted" : "",
+        chainMuted ? "is-chain-muted" : "",
+      ].filter(Boolean).join(" ") || undefined;
       return {
         ...edge,
         ...(handles ? { sourceHandle: handles.sourceHandle, targetHandle: handles.targetHandle } : {}),
-        className: spacingMuted ? "is-spacing-muted" : undefined,
+        className,
         selected,
         type: "dependency",
         reconnectable: selected,
@@ -2603,7 +2659,7 @@ export default function TaskApp() {
         interactionWidth: 26,
       };
     });
-  }, [data.dependencies, flowNodes, invalidDragId, removeDependency, selectedEdgeId]);
+  }, [data.dependencies, flowNodes, invalidDragId, removeDependency, selectedEdgeId, selectedTaskChainIds]);
 
   const flushNodeLayout = useCallback(() => {
     if (!pendingNodePositions.current.size && !pendingNodeSizes.current.size) return;

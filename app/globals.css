@@ -333,6 +333,7 @@ button { color: inherit; }
 .react-flow__edge-path { transition: stroke 120ms ease, stroke-width 120ms ease; }
 .react-flow__edge { transition: opacity 120ms ease; }
 .react-flow__edge.is-spacing-muted { opacity: .18; }
+.react-flow__edge.is-chain-muted { opacity: .28; }
 .react-flow__edge:hover .react-flow__edge-path, .react-flow__edge.selected .react-flow__edge-path { stroke: var(--blue) !important; stroke-width: 2 !important; }
 .react-flow__edge.selected .react-flow__edge-path { filter: drop-shadow(0 0 2px var(--blue-ring)); }
 .edge-endpoint-indicator { fill: var(--surface); stroke: var(--blue); stroke-width: 1.8; pointer-events: none; filter: drop-shadow(0 1px 1px var(--shadow-medium)); }
