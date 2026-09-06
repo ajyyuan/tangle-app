@@ -111,7 +111,7 @@ const LAYOUT_START_Y = 72;
 const LAYOUT_LAYER_GAP = 110;
 const LAYOUT_SIBLING_GAP = NODE_MIN_CLEARANCE;
 const LAYOUT_GUIDE_EXTENT = 50_000;
-const AUTOMATIC_FIT_MIN_ZOOM = 0.7;
+const AUTOMATIC_FIT_MIN_ZOOM = 0.9;
 const DESKTOP_WORKSPACE_QUERY = "(min-width: 1180px)";
 const CONNECTION_SIDES: { side: ConnectionSide; position: Position }[] = [
   { side: "top", position: Position.Top },
@@ -3360,7 +3360,11 @@ export default function TaskApp() {
                   </ViewportPortal>
                 )}
                 <Background color="var(--grid)" gap={24} size={1} />
-                <Controls showInteractive={false} position="bottom-left" />
+                <Controls
+                  showInteractive={false}
+                  position="bottom-left"
+                  fitViewOptions={{ padding: 0.14, minZoom: AUTOMATIC_FIT_MIN_ZOOM, maxZoom: 1.15 }}
+                />
             </ReactFlow>
             {!hasVisibleGraphTasks && !graphDraft && (
               <div className="graph-empty" aria-hidden="true">
