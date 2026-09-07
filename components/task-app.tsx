@@ -37,6 +37,12 @@ type LayoutDirection = "vertical" | "horizontal";
 type ListOrder = "manual" | "up-next";
 type DropPlacement = "before" | "after";
 type DropTarget = { id: string; placement: DropPlacement };
+type GraphClickTarget = {
+  kind: "title" | "card" | "check";
+  taskId: string;
+  selected: boolean;
+} | { kind: "pane" | "other" };
+type GraphClick = { target: GraphClickTarget; time: number; point: Point };
 type LayoutGuide = { id: string; x: number; y: number; width: number; height: number };
 type ArrangementSnapshot = {
   direction: LayoutDirection;
@@ -55,8 +61,11 @@ type PersistedTaskNodeData = {
   title: string;
   completed: boolean;
   blocked: boolean;
+  selected: boolean;
+  editing: boolean;
   onToggle: (id: string) => void;
   onRename: (id: string, title: string) => void;
+  onEditingChange: (id: string, editing: boolean) => void;
 };
 type DraftTaskNodeData = {
   draft: true;
@@ -488,13 +497,34 @@ function cloneArrangement(snapshot: ArrangementSnapshot): ArrangementSnapshot {
   };
 }
 
+function graphClickTarget(target: EventTarget | null, selectedTaskId: string | null): GraphClickTarget {
+  if (!(target instanceof Element)) return { kind: "other" };
+  const node = target.closest<HTMLElement>(".react-flow__node");
+  if (!node || node.querySelector(".task-node.is-draft")) {
+    return { kind: target.classList.contains("react-flow__pane") ? "pane" : "other" };
+  }
+
+  const taskId = node.dataset.id;
+  if (!taskId || target.closest(".react-flow__handle, .node-resize-control")) return { kind: "other" };
+  const selected = taskId === selectedTaskId;
+  if (target.closest(".check-button")) return { kind: "check", taskId, selected };
+  if (target.closest(".inline-title, .inline-title-input")) return { kind: "title", taskId, selected };
+  return { kind: "card", taskId, selected };
+}
+
 function CheckButton({ checked, onClick, label }: { checked: boolean; onClick: () => void; label: string }) {
+  const lastPointerClick = useRef(-Infinity);
   return (
     <button
       type="button"
       className={`check-button nodrag nopan ${checked ? "is-checked" : ""}`}
       onClick={(event) => {
         event.stopPropagation();
+        if (event.detail > 0) {
+          const elapsed = event.timeStamp - lastPointerClick.current;
+          if (event.detail > 1 || elapsed < 360) return;
+          lastPointerClick.current = event.timeStamp;
+        }
         onClick();
       }}
       onDoubleClick={(event) => event.stopPropagation()}
@@ -512,25 +542,60 @@ function InlineTitle({
   onSave,
   className = "",
   activation = "click",
+  editing: controlledEditing,
+  onEditingChange,
 }: {
   title: string;
   completed: boolean;
   onSave: (title: string) => void;
   className?: string;
   activation?: "click" | "double-click";
+  editing?: boolean;
+  onEditingChange?: (editing: boolean) => void;
 }) {
-  const [editing, setEditing] = useState(false);
+  const [localEditing, setLocalEditing] = useState(false);
+  const editing = controlledEditing ?? localEditing;
   const [draft, setDraft] = useState(title);
   const inputRef = useRef<HTMLInputElement>(null);
   const titleButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => setDraft(title), [title]);
   useEffect(() => {
-    if (editing) {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }
+    if (!editing) return;
+    const focusInput = () => {
+      const input = inputRef.current;
+      if (!input) return;
+      input.focus({ preventScroll: true });
+      input.select();
+    };
+
+    focusInput();
+    let frame = window.requestAnimationFrame(() => {
+      focusInput();
+      frame = window.requestAnimationFrame(focusInput);
+    });
+    const timer = window.setTimeout(() => {
+      const activeElement = document.activeElement;
+      const focusStayedInGraph = activeElement instanceof Element
+        && activeElement.closest(".graph-panel");
+      if (
+        activeElement === document.body
+        || activeElement === document.documentElement
+        || activeElement === inputRef.current
+        || focusStayedInGraph
+      ) focusInput();
+    }, 80);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
   }, [editing]);
+
+  const setEditing = (next: boolean) => {
+    if (controlledEditing === undefined) setLocalEditing(next);
+    else onEditingChange?.(next);
+  };
 
   const restoreTitleFocus = () => window.requestAnimationFrame(() => titleButtonRef.current?.focus());
 
@@ -692,7 +757,15 @@ function TaskNode({ id, data, width }: NodeProps<TaskFlowNode>) {
           onClick={() => data.onToggle(id)}
           label={data.completed ? `Mark ${data.title} incomplete` : `Complete ${data.title}`}
         />
-        <InlineTitle title={data.title} completed={data.completed} onSave={(title) => data.onRename(id, title)} className="node-title" activation="double-click" />
+        <InlineTitle
+          title={data.title}
+          completed={data.completed}
+          onSave={(title) => data.onRename(id, title)}
+          className="node-title"
+          activation={data.selected ? "click" : "double-click"}
+          editing={data.editing}
+          onEditingChange={(editing) => data.onEditingChange(id, editing)}
+        />
       </div>
       {CONNECTION_SIDES.map(({ side, position }) => (
         <Handle
@@ -2018,11 +2091,11 @@ export default function TaskApp() {
   const [newTask, setNewTask] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [inspectedTaskId, setInspectedTaskId] = useState<string | null>(null);
-  const inspectorOpen = inspectedTaskId !== null;
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [invalidDragId, setInvalidDragId] = useState<string | null>(null);
   const [graphDraft, setGraphDraft] = useState<GraphDraft | null>(null);
+  const [graphEditingTaskId, setGraphEditingTaskId] = useState<string | null>(null);
   const [isArranging, setIsArranging] = useState(false);
   const [arrangedDirection, setArrangedDirection] = useState<LayoutDirection | null>(null);
   const [layoutGuides, setLayoutGuides] = useState<LayoutGuide[]>([]);
@@ -2048,7 +2121,7 @@ export default function TaskApp() {
   const arrangementOptionsRef = useRef<HTMLDivElement>(null);
   const appearanceOptionsRef = useRef<HTMLDivElement>(null);
   const backupInputRef = useRef<HTMLInputElement>(null);
-  const lastPaneClick = useRef<{ time: number; point: Point } | null>(null);
+  const lastGraphClick = useRef<GraphClick | null>(null);
   const pendingNodePositions = useRef<Map<string, Point>>(new Map());
   const pendingNodeSizes = useRef<Map<string, Size>>(new Map());
   const flowInstance = useRef<ReactFlowInstance<TaskFlowNode, DependencyFlowEdge> | null>(null);
@@ -2062,6 +2135,9 @@ export default function TaskApp() {
       update,
       arrangement: previousArrangement ? cloneArrangement(previousArrangement) : null,
     });
+  }, []);
+  const handleGraphEditingChange = useCallback((id: string, editing: boolean) => {
+    setGraphEditingTaskId((current) => editing ? id : current === id ? null : current);
   }, []);
   const clearArrangement = useCallback(() => {
     arrangementVersion.current += 1;
@@ -2218,7 +2294,7 @@ export default function TaskApp() {
       void flowInstance.current?.fitView({ padding: 0.14, minZoom: AUTOMATIC_FIT_MIN_ZOOM, maxZoom: 1.15, duration: 180 });
     }, 80);
     return () => clearTimeout(timer);
-  }, [inspectorOpen, isDesktopWorkspace, view]);
+  }, [isDesktopWorkspace, view]);
 
   useEffect(() => () => {
     arrangementVersion.current += 1;
@@ -2486,6 +2562,10 @@ export default function TaskApp() {
       .map((task) => task.id),
   ), [data.tasks, settlingCompletedIds, showCompletedOnGraph]);
 
+  useEffect(() => {
+    if (graphEditingTaskId && !visibleGraphTaskIds.has(graphEditingTaskId)) setGraphEditingTaskId(null);
+  }, [graphEditingTaskId, visibleGraphTaskIds]);
+
   const selectedTaskChainIds = useMemo(
     () => dependencyChainTaskIds(selectedTaskId, visibleGraphTaskIds, data.dependencies),
     [data.dependencies, selectedTaskId, visibleGraphTaskIds],
@@ -2505,8 +2585,11 @@ export default function TaskApp() {
           title: task.title,
           completed: task.completed,
           blocked: blockedIds.has(task.id),
+          selected: task.id === selectedTaskId,
+          editing: graphEditingTaskId === task.id,
           onToggle: toggleTask,
           onRename: renameTask,
+          onEditingChange: handleGraphEditingChange,
         },
       }));
 
@@ -2535,7 +2618,7 @@ export default function TaskApp() {
     }
 
     return nodes;
-  }, [blockedIds, cancelGraphTask, commitGraphTask, data.tasks, graphDraft, renameTask, selectedTaskId, toggleTask, visibleGraphTaskIds]);
+  }, [blockedIds, cancelGraphTask, commitGraphTask, data.tasks, graphDraft, graphEditingTaskId, handleGraphEditingChange, renameTask, selectedTaskId, toggleTask, visibleGraphTaskIds]);
 
   const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<TaskFlowNode>(taskNodes);
 
@@ -2775,7 +2858,12 @@ export default function TaskApp() {
   }, [clearArrangement, pendingImport, showNotice]);
 
   const handleFlowNodesChange = useCallback((changes: NodeChange<TaskFlowNode>[]) => {
-    onFlowNodesChange(changes);
+    const appliedChanges = graphEditingTaskId && selectedTaskId !== graphEditingTaskId
+      ? changes.map((change) => change.type === "select" && change.id === graphEditingTaskId
+        ? { ...change, selected: false }
+        : change)
+      : changes;
+    onFlowNodesChange(appliedChanges);
     let sizeChanged = false;
     let dragSpacingState: { id: string; invalid: boolean } | null = null;
     changes.forEach((change) => {
@@ -2810,7 +2898,7 @@ export default function TaskApp() {
       if (positionSaveTimer.current) clearTimeout(positionSaveTimer.current);
       positionSaveTimer.current = setTimeout(flushNodeLayout, 140);
     }
-  }, [clearArrangement, flowNodes, flushNodeLayout, onFlowNodesChange, setFlowNodes]);
+  }, [clearArrangement, flowNodes, flushNodeLayout, graphEditingTaskId, onFlowNodesChange, selectedTaskId, setFlowNodes]);
 
   const finishNodeDrag = useCallback((node: TaskFlowNode) => {
     const proposedPosition = pendingNodePositions.current.get(node.id) ?? node.position;
@@ -3086,6 +3174,34 @@ export default function TaskApp() {
     });
   }, [data.tasks, isDesktopWorkspace, tasksPaneOpen]);
 
+  const handleGraphDoubleActivation = useCallback((
+    first: GraphClickTarget,
+    second: GraphClickTarget,
+    point: Point,
+    endsOnPane: boolean,
+  ) => {
+    if (
+      "taskId" in first
+      && "taskId" in second
+      && first.taskId !== second.taskId
+    ) return;
+
+    if (first.kind === "title") {
+      if (!first.selected) setSelectedTaskId(null);
+      setSelectedEdgeId(null);
+      setGraphEditingTaskId(first.taskId);
+      return;
+    }
+    if (first.kind === "card") {
+      setSelectedTaskId(first.taskId);
+      setSelectedEdgeId(null);
+      setInspectedTaskId(first.taskId);
+      revealTaskInList(first.taskId);
+      return;
+    }
+    if (first.kind === "pane" && second.kind === "pane" && endsOnPane) beginGraphTask(point);
+  }, [beginGraphTask, revealTaskInList]);
+
   const selectTaskFromList = useCallback((id: string) => {
     setSelectedTaskId(id);
     setSelectedEdgeId(null);
@@ -3280,7 +3396,45 @@ export default function TaskApp() {
             </aside>
           )}
           {!isDesktopWorkspace && view === "list" ? listPanel : (
-          <div className={`graph-panel ${isArranging ? "is-arranging" : ""}`}>
+          <div
+            className={`graph-panel ${isArranging ? "is-arranging" : ""}`}
+            onClickCapture={(event) => {
+              if (event.button !== 0) return;
+              if (event.target instanceof Element && event.target.closest(".inline-title-input, .draft-task-input")) {
+                lastGraphClick.current = null;
+                return;
+              }
+              const target = graphClickTarget(event.target, selectedTaskId);
+              const point = { x: event.clientX, y: event.clientY };
+              const previous = lastGraphClick.current;
+              const elapsed = previous ? event.timeStamp - previous.time : Infinity;
+              const distance = previous ? Math.hypot(point.x - previous.point.x, point.y - previous.point.y) : Infinity;
+              const isDoubleActivation = event.detail === 2 || (elapsed >= 0 && elapsed < 360 && distance < 24);
+              if (previous && isDoubleActivation) {
+                event.preventDefault();
+                event.stopPropagation();
+                lastGraphClick.current = null;
+                handleGraphDoubleActivation(
+                  previous.target,
+                  target,
+                  point,
+                  event.target instanceof Element && event.target.classList.contains("react-flow__pane"),
+                );
+                return;
+              }
+              lastGraphClick.current = { target, time: event.timeStamp, point };
+              if (target.kind === "pane") {
+                setSelectedTaskId(null);
+                setSelectedEdgeId(null);
+              }
+            }}
+            onDoubleClickCapture={(event) => {
+              if (event.target instanceof Element && event.target.closest(".inline-title-input, .draft-task-input")) return;
+              lastGraphClick.current = null;
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+          >
             <ReactFlow
                 nodes={flowNodes}
                 edges={flowEdges}
@@ -3297,18 +3451,10 @@ export default function TaskApp() {
                 onNodeClick={(event, node) => {
                   if (node.data.draft) return;
                   if (event.target instanceof Element && event.target.closest(".react-flow__handle")) return;
+                  if (selectedTaskId === node.id) return;
                   setSelectedTaskId(node.id);
                   setSelectedEdgeId(null);
                   setInspectedTaskId((inspected) => inspected ? node.id : null);
-                  revealTaskInList(node.id);
-                }}
-                onNodeDoubleClick={(event, node) => {
-                  if (node.data.draft) return;
-                  if (event.target instanceof Element && event.target.closest(".check-button, .inline-title, .inline-title-input, .react-flow__handle")) return;
-                  event.stopPropagation();
-                  setSelectedTaskId(node.id);
-                  setSelectedEdgeId(null);
-                  setInspectedTaskId(node.id);
                   revealTaskInList(node.id);
                 }}
                 onEdgeClick={(event, edge) => {
@@ -3316,16 +3462,9 @@ export default function TaskApp() {
                   setSelectedTaskId(null);
                   setSelectedEdgeId(edge.id);
                 }}
-                onPaneClick={(event) => {
+                onPaneClick={() => {
                   setSelectedTaskId(null);
                   setSelectedEdgeId(null);
-                  const point = { x: event.clientX, y: event.clientY };
-                  const previous = lastPaneClick.current;
-                  const elapsed = previous ? event.timeStamp - previous.time : Infinity;
-                  const distance = previous ? Math.hypot(point.x - previous.point.x, point.y - previous.point.y) : Infinity;
-                  const isDoubleActivation = event.detail === 2 || (elapsed > 0 && elapsed < 360 && distance < 24);
-                  lastPaneClick.current = isDoubleActivation ? null : { time: event.timeStamp, point };
-                  if (isDoubleActivation) beginGraphTask(point);
                 }}
                 deleteKeyCode={null}
                 zoomOnDoubleClick={false}
