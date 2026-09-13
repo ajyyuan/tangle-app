@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
+import { siteUrl } from "./site";
 import "@xyflow/react/dist/style.css";
 import "./globals.css";
 
 const description = "A quiet personal task list with visual dependencies.";
-const siteUrl = "https://aqeo.app";
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
