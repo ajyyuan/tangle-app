@@ -1,4 +1,4 @@
-# Carpaccio MVP Plan
+# Aqeo MVP Plan
 
 ## Foundation
 

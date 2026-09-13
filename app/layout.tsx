@@ -3,16 +3,16 @@ import "@xyflow/react/dist/style.css";
 import "./globals.css";
 
 const description = "A quiet personal task list with visual dependencies.";
-const siteUrl = "https://carpaccio.io";
+const siteUrl = "https://aqeo.app";
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: {
-    default: "Carpaccio",
-    template: "%s · Carpaccio",
+    default: "Aqeo",
+    template: "%s · Aqeo",
   },
   description,
-  applicationName: "Carpaccio",
+  applicationName: "Aqeo",
   category: "productivity",
   alternates: {
     canonical: "/",
@@ -20,13 +20,13 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     url: "/",
-    siteName: "Carpaccio",
-    title: "Carpaccio — Tasks, clearly connected",
+    siteName: "Aqeo",
+    title: "Aqeo — Tasks, clearly connected",
     description,
   },
   twitter: {
     card: "summary_large_image",
-    title: "Carpaccio — Tasks, clearly connected",
+    title: "Aqeo — Tasks, clearly connected",
     description,
   },
 };
@@ -34,7 +34,7 @@ export const metadata: Metadata = {
 const appearanceScript = `
 (() => {
   try {
-    const saved = localStorage.getItem("carpaccio-appearance-v1");
+    const saved = localStorage.getItem("aqeo-appearance-v1");
     const theme = saved === "light" || saved === "dark" ? saved : "system";
     const resolved = theme === "system"
       ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")

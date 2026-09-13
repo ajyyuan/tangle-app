@@ -1,4 +1,4 @@
-# Carpaccio
+# Aqeo
 
 A tiny personal task manager with list and dependency graph views.
 
